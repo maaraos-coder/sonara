@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: sonara
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
