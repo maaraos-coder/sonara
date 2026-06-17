@@ -1277,7 +1277,7 @@ def login_page():
     with col2:
         st.markdown("""
         <div class='card'>
-            <div class='card-title'>SONARA 1.0 COMERCIAL</div>
+            <div class='card-title'>SONARA 1.0 DISEÑADO POR MAAB</div>
             <div class='card-text'>
                 Plataforma de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
             </div>
