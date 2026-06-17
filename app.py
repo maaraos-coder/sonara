@@ -5163,7 +5163,42 @@ def sonara_run_fast_optimizer(base_solution=None, target_rw=45, max_espesor=150,
 
     return sorted(scored, key=key)
 
+def sonara_solution_cost_for_report(sol):
+    """
+    Devuelve el costo real de una solución.
+    Prioridad:
+    1. Cubicación
+    2. Costo estimado
+    """
+    try:
+        cub = sol.get("cubicacion", {})
 
+        if isinstance(cub, dict):
+
+            if cub.get("total") not in [None, ""]:
+                return float(cub.get("total"))
+
+            total = 0
+
+            for item in cub.get("items", []):
+
+                cantidad = float(item.get("Cantidad", 0))
+                precio = float(item.get("Precio unitario", 0))
+
+                subtotal = item.get("Subtotal")
+
+                if subtotal not in [None, ""]:
+                    total += float(subtotal)
+                else:
+                    total += cantidad * precio
+
+            if total > 0:
+                return total
+
+        return float(sonara_solution_cost_for_report(sol))
+
+    except:
+        return 0
 def app_optimizador():
     """
     Optimizador IA rápido y contextual.
@@ -5327,6 +5362,7 @@ def app_optimizador():
         selected_variant = results[idx]
 
         if st.button("💾 Guardar variante optimizada en el requerimiento", use_container_width=True):
+
             opt_solution = {
                 "id": f"opt_{datetime.now().strftime('%Y%m%d%H%M%S')}",
                 "nombre": selected_variant.get("nombre", "Solución optimizada"),
@@ -5348,29 +5384,102 @@ def app_optimizador():
                 "configuracion": selected_variant.get("configuracion", ""),
                 "fecha": datetime.now().isoformat(timespec="seconds"),
             }
-
+        
+            # ==========================================
+            # CUBICACIÓN AUTOMÁTICA DE LA OPTIMIZACIÓN
+            # ==========================================
+        
+            cubicacion_items = []
+        
+            area = float(area_m2)
+        
+            for layer in opt_solution.get("layers_left", []):
+        
+                mat = layer.get("material", {})
+        
+                precio = float(mat.get("precio", 0))
+        
+                cubicacion_items.append({
+                    "Ítem": mat.get("nombre", "Material"),
+                    "Unidad": "m²",
+                    "Cantidad": area,
+                    "Precio unitario": precio,
+                    "Subtotal": area * precio
+                })
+        
+            for layer in opt_solution.get("layers_right", []):
+        
+                mat = layer.get("material", {})
+        
+                precio = float(mat.get("precio", 0))
+        
+                cubicacion_items.append({
+                    "Ítem": mat.get("nombre", "Material"),
+                    "Unidad": "m²",
+                    "Cantidad": area,
+                    "Precio unitario": precio,
+                    "Subtotal": area * precio
+                })
+        
+            total_cubicacion = sum(
+                item["Subtotal"]
+                for item in cubicacion_items
+            )
+        
+            opt_solution["cubicacion"] = {
+                "tipo_cubicacion": "Optimización IA",
+                "area_bruta": area,
+                "area_neta": area,
+                "area_vanos": 0,
+                "masa": opt_solution.get("masa", 0),
+                "espesor": opt_solution.get("espesor", 0),
+                "items": cubicacion_items,
+                "total": total_cubicacion
+            }
+        
+            opt_solution["costo_estimado"] = total_cubicacion
+        
+            st.session_state["selected_solution_for_cubicacion"] = opt_solution
+        
             saved = False
+        
             if isinstance(project, dict) and isinstance(selected_req, dict):
+        
                 req_id = selected_req.get("id")
+        
                 for req in project.get("requirements", []):
+        
                     if req.get("id") == req_id:
+        
                         req.setdefault("solutions", []).append(opt_solution)
+        
                         saved = True
                         break
+        
                 if saved:
+        
                     st.session_state["active_project"] = project
+        
                     try:
                         save_active_project(project)
+        
                     except Exception:
+        
                         try:
                             save_projects(load_projects())
+        
                         except Exception:
                             pass
-
+        
             if not saved:
-                st.session_state.setdefault("optimized_solutions", []).append(opt_solution)
-
-            st.success("Variante optimizada guardada.")
+                st.session_state.setdefault(
+                    "optimized_solutions",
+                    []
+                ).append(opt_solution)
+        
+            st.success(
+                "Variante optimizada guardada y cubicada correctamente."
+            )
 
 def app_materiales():
     st.markdown(
@@ -5525,8 +5634,6 @@ def app_materiales():
         """,
         unsafe_allow_html=True
     )
-
-
 
 
 # =========================================================
