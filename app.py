@@ -15,7 +15,7 @@ import secrets
 # v0.9.0 con motor acústico WALLS portado desde MATLAB
 # =========================================================
 
-APP_VERSION = "1.0.5 INFORME COSTOS + CUBICACION EDITABLE"
+APP_VERSION = "1.1.0 DESCRIPTORES + INFORME DETALLADO"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -2072,6 +2072,198 @@ def layer_inputs(prefix, titulo, materiales, mats, default_count=1, max_layers=5
 # CALCULADORA FASE 2
 # =========================================================
 
+
+# =========================================================
+# DESCRIPTORES DE EVALUACIÓN
+# =========================================================
+
+def stc_estimate_from_curve(third_freqs, tl_third, rw):
+    """
+    Estimación preliminar STC desde la curva 1/3 octava.
+    STC usa ASTM E413 y no es idéntico a ISO 717-1.
+    Para SONARA v1.1 se informa como estimación conservadora a partir de la curva calculada.
+    """
+    try:
+        freqs = np.asarray(third_freqs, dtype=float)
+        vals = np.asarray(tl_third, dtype=float)
+        mask = (freqs >= 125) & (freqs <= 4000)
+        if mask.sum() < 10:
+            return int(round(rw))
+        # Aproximación simple: limita el valor por el promedio en bandas medias y por Rw.
+        mid = vals[mask]
+        approx = min(float(rw), float(np.percentile(mid, 35)) + 2.0)
+        return int(round(max(0, approx)))
+    except Exception:
+        return int(round(rw))
+
+
+def airborne_descriptor_options():
+    return [
+        "ISO 717-1 · Rw",
+        "ISO 717-1 · Rw + C",
+        "ISO 717-1 · Rw + Ctr",
+        "ANSI/ASTM · STC estimado",
+        "ISO 16283/12354 · DnT,w estimado",
+        "ISO 16283/12354 · DnT,A estimado",
+        "ISO 16283/12354 · DnT,Atr estimado",
+    ]
+
+
+def descriptor_key(label):
+    label = str(label)
+    if "Rw + Ctr" in label:
+        return "rw_ctr"
+    if "Rw + C" in label:
+        return "rw_c"
+    if "STC" in label:
+        return "stc"
+    if "DnT,Atr" in label:
+        return "dnt_atr"
+    if "DnT,A" in label:
+        return "dnt_a"
+    if "DnT,w" in label:
+        return "dntw"
+    return "rw"
+
+
+def descriptor_public_name(key):
+    return {
+        "rw": "Rw",
+        "rw_c": "Rw + C",
+        "rw_ctr": "Rw + Ctr",
+        "stc": "STC estimado",
+        "dntw": "DnT,w estimado",
+        "dnt_a": "DnT,A estimado",
+        "dnt_atr": "DnT,Atr estimado",
+    }.get(str(key), str(key))
+
+
+def calculate_airborne_descriptors(rw, c, ctr, stc, area_sep=10.0, vol_rec=35.0, t_rec=0.5):
+    """
+    Calcula/estima descriptores derivados de ruido aéreo.
+    Rw/Rw+C/Rw+Ctr: desde ISO 717-1.
+    STC: estimación ASTM.
+    DnT: estimación preliminar desde R + 10log(V/(T*S)) usando T0=0.5 s.
+    """
+    rw = float(rw)
+    c = float(c)
+    ctr = float(ctr)
+    stc = float(stc)
+    area_sep = max(float(area_sep or 10.0), 0.1)
+    vol_rec = max(float(vol_rec or 35.0), 0.1)
+    t_rec = max(float(t_rec or 0.5), 0.1)
+
+    dnt_correction = 10.0 * np.log10(vol_rec / (t_rec * area_sep))
+    dntw = rw + dnt_correction
+
+    return {
+        "rw": rw,
+        "c": c,
+        "ctr": ctr,
+        "rw_c": rw + c,
+        "rw_ctr": rw + ctr,
+        "stc": stc,
+        "dntw": dntw,
+        "dnt_a": dntw + c,
+        "dnt_atr": dntw + ctr,
+        "dnt_correction": dnt_correction,
+        "area_sep": area_sep,
+        "vol_rec": vol_rec,
+        "t_rec": t_rec,
+    }
+
+
+def solution_descriptor_value(solution, indicador):
+    """
+    Obtiene desde una solución el valor que corresponde al descriptor normativo.
+    """
+    if not solution:
+        return None
+    ind = str(indicador or "Rw").replace(" ", "").lower()
+
+    mapping = {
+        "rw": "rw",
+        "r'w": "rw",
+        "ra": "rw_c",
+        "r'a": "rw_c",
+        "rw+c": "rw_c",
+        "rw+ctr": "rw_ctr",
+        "stc": "stc",
+        "astc": "stc",
+        "nic": "stc",
+        "dnt,w": "dntw",
+        "dntw": "dntw",
+        "dnt,a": "dnt_a",
+        "dnta": "dnt_a",
+        "dnt,atr": "dnt_atr",
+        "dntatr": "dnt_atr",
+        "d2m,nt,w": "dntw",
+        "d2mntw": "dntw",
+        "d2m,nt,atr": "dnt_atr",
+        "d2mntatr": "dnt_atr",
+        "l'nt,w": "lntw",
+        "lnt,w": "lntw",
+        "lntw": "lntw",
+        "ln,w": "lnw",
+        "lnw": "lnw",
+    }
+
+    key = mapping.get(ind)
+    if key:
+        if key in solution and solution.get(key) is not None:
+            return solution.get(key)
+        descriptors = solution.get("descriptores", {})
+        if isinstance(descriptors, dict) and key in descriptors:
+            return descriptors.get(key)
+
+    # fallback
+    for k in ["valor", "rw", "dntw", "lntw", "lnw"]:
+        if solution.get(k) is not None:
+            return solution.get(k)
+    return None
+
+
+def solution_composition_text(sol):
+    if not sol:
+        return ""
+    if sol.get("componentes"):
+        return " + ".join([
+            f"{c.get('nombre','Componente')} ({c.get('area','-')} m², R {c.get('r','-')} dB)"
+            for c in sol.get("componentes", [])
+        ])
+
+    parts = []
+    left = sol.get("layers_left", []) or []
+    right = sol.get("layers_right", []) or []
+    if left:
+        parts.append("Lado 1: " + " + ".join([x.get("nombre", "") for x in left]))
+    if right:
+        parts.append("Lado 2: " + " + ".join([x.get("nombre", "") for x in right]))
+    if sol.get("camara"):
+        parts.append(f"Cámara: {sol.get('camara')} mm")
+    if sol.get("absorbente"):
+        parts.append(f"Absorbente: {sol.get('absorbente')}")
+    if sol.get("configuracion"):
+        parts.append(f"Configuración: {sol.get('configuracion')}")
+    return " | ".join([p for p in parts if p])
+
+
+def solution_cubicacion_summary(sol):
+    cub = sol.get("cubicacion", {}) if isinstance(sol, dict) else {}
+    if not isinstance(cub, dict) or not cub:
+        return {"area_neta": "", "area_bruta": "", "area_vanos": "", "total": 0, "tipo": "", "items": ""}
+    items = cub.get("items", [])
+    items_txt = "; ".join([f"{i.get('Ítem','')}: {i.get('Cantidad','')} {i.get('Unidad','')}" for i in items[:5]]) if isinstance(items, list) else ""
+    return {
+        "area_neta": cub.get("area_neta", ""),
+        "area_bruta": cub.get("area_bruta", ""),
+        "area_vanos": cub.get("area_vanos", ""),
+        "total": float(cub.get("total", 0) or 0),
+        "tipo": cub.get("tipo_cubicacion", ""),
+        "items": items_txt,
+    }
+
+
 def app_calculator():
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>Calculadora</h2>",
@@ -2101,6 +2293,25 @@ def app_calculator():
             horizontal=True,
             key="banda_frecuencia",
         )
+
+        descriptor_label = st.selectbox(
+            "Método / descriptor de evaluación",
+            airborne_descriptor_options(),
+            index=0,
+            key="airborne_descriptor_label",
+            help="Rw, Rw+C y Rw+Ctr se obtienen desde ISO 717-1. STC y DnT se presentan como estimaciones preliminares."
+        )
+
+        descriptor_sel = descriptor_key(descriptor_label)
+
+        area_sep = 10.0
+        vol_rec = 35.0
+        t_rec = 0.5
+        if descriptor_sel in ["dntw", "dnt_a", "dnt_atr"]:
+            st.markdown("<div class='result-note'>Para DnT se requiere geometría de recinto. Esta es una estimación preliminar de diseño.</div>", unsafe_allow_html=True)
+            area_sep = st.number_input("Superficie del elemento separador S [m²]", value=10.0, min_value=0.5, step=0.5, key="dnt_area_sep")
+            vol_rec = st.number_input("Volumen recinto receptor V [m³]", value=35.0, min_value=1.0, step=1.0, key="dnt_vol_rec")
+            t_rec = st.number_input("Tiempo reverberación receptor T [s]", value=0.5, min_value=0.1, step=0.1, key="dnt_t_rec")
 
         configuracion = None
         tipo_ventana = None
@@ -2249,6 +2460,15 @@ def app_calculator():
 
     tickvals = np.array([63, 125, 250, 500, 1000, 2000, 4000])
     rw, c, ctr, iso_freqs, iso_curve, tl_rw_iso = iso717_rw_simple(third_freqs, tl_third, return_curve=True)
+    stc = stc_estimate_from_curve(third_freqs, tl_third, rw)
+    descriptores = calculate_airborne_descriptors(
+        rw, c, ctr, stc,
+        area_sep=area_sep,
+        vol_rec=vol_rec,
+        t_rec=t_rec,
+    )
+    descriptor_value = descriptores.get(descriptor_sel, rw)
+    descriptor_name = descriptor_public_name(descriptor_sel)
 
     df = pd.DataFrame({
         "Frecuencia [Hz]": freqs.astype(int),
@@ -2274,19 +2494,19 @@ def app_calculator():
             f"""
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
                 <div class="result-card">
-                    <div class="result-label">Rw</div>
-                    <div class="result-value">{rw}</div>
+                    <div class="result-label">{descriptor_name}</div>
+                    <div class="result-value">{descriptor_value:.0f}</div>
                     <div class="result-unit">dB</div>
                 </div>
                 <div class="result-card">
-                    <div class="result-label">C</div>
-                    <div class="result-value">{c}</div>
+                    <div class="result-label">Rw / C / Ctr</div>
+                    <div class="result-value" style="font-size:30px;">{rw}/{c}/{ctr}</div>
                     <div class="result-unit">dB</div>
                 </div>
                 <div class="result-card">
-                    <div class="result-label">Ctr</div>
-                    <div class="result-value">{ctr}</div>
-                    <div class="result-unit">dB</div>
+                    <div class="result-label">STC</div>
+                    <div class="result-value">{stc}</div>
+                    <div class="result-unit">estimado</div>
                 </div>
                 <div class="result-card">
                     <div class="result-label">Masa</div>
@@ -2304,7 +2524,7 @@ def app_calculator():
         )
 
         st.markdown(
-            f"<div class='result-note'>{diagnostic_note(tipo, rw, c, ctr, fc, masa)}</div>",
+            f"<div class='result-note'>{diagnostic_note(tipo, rw, c, ctr, fc, masa)}<br><b>Descriptor seleccionado:</b> {descriptor_name} = {descriptor_value:.1f} dB.</div>",
             unsafe_allow_html=True,
         )
 
@@ -2427,15 +2647,32 @@ def app_calculator():
             descripcion += f" · {tipo_ventana}"
 
         solution_save_widget({
-            "nombre": f"{tipo} Rw {rw} dB",
+            "nombre": f"{tipo} {descriptor_name} {descriptor_value:.0f} dB",
             "tipo_calculo": "Ruido aéreo",
-            "resultado_label": f"Rw {rw} dB · C {c} · Ctr {ctr}",
+            "resultado_label": f"{descriptor_name} {descriptor_value:.0f} dB · Rw {rw} · C {c} · Ctr {ctr} · STC {stc}",
+            "descriptor_seleccionado": descriptor_name,
+            "descriptor_key": descriptor_sel,
+            "valor": float(descriptor_value),
             "rw": float(rw),
             "c": float(c),
             "ctr": float(ctr),
+            "rw_c": float(descriptores.get("rw_c")),
+            "rw_ctr": float(descriptores.get("rw_ctr")),
+            "stc": float(stc),
+            "dntw": float(descriptores.get("dntw")),
+            "dnt_a": float(descriptores.get("dnt_a")),
+            "dnt_atr": float(descriptores.get("dnt_atr")),
+            "descriptores": {k: float(v) for k, v in descriptores.items() if isinstance(v, (int, float, np.integer, np.floating))},
             "masa": round(float(masa), 1),
             "espesor": None if espesor_total is None else round(float(espesor_total), 1),
             "descripcion": descripcion,
+            "composicion": solution_composition_text({
+                "layers_left": layer_summary(layers_left),
+                "layers_right": layer_summary(layers_right),
+                "camara": camara,
+                "configuracion": configuracion,
+                "absorbente": absorbente_tipo,
+            }),
             "layers_left": layer_summary(layers_left),
             "layers_right": layer_summary(layers_right),
             "camara": camara,
@@ -4478,48 +4715,44 @@ def app_cubicacion():
         masa_txt = f"{float(masa):.1f}"
         esp_txt = f"{float(espesor):.0f}"
 
-    # Editor de cubicación: permite agregar/quitar ítems faltantes según la solución real.
-    st.markdown("<div class='sonara-card-title'>Editar cubicación según solución real</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='result-note'>Tipo de cubicación detectado: <b>{cubicacion_tipo}</b>. Puedes editar cantidades, precios o agregar partidas faltantes antes de guardar.</div>",
-        unsafe_allow_html=True
-    )
-
-    df_edit = st.data_editor(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key=f"cub_editor_{sol.get('id','sin_id')}",
-        column_config={
-            "Ítem": st.column_config.TextColumn("Ítem"),
-            "Unidad": st.column_config.TextColumn("Unidad"),
-            "Cantidad": st.column_config.NumberColumn("Cantidad", step=0.01),
-            "Precio unitario": st.column_config.NumberColumn("Precio unitario", step=100),
-            "Subtotal": st.column_config.NumberColumn("Subtotal", disabled=True),
-        }
-    )
-
-    df_calc, total = normalize_cubicacion_df(df_edit)
-
-    total_row = pd.DataFrame([{
-        "Ítem": "TOTAL",
-        "Unidad": "",
-        "Cantidad": "",
-        "Precio unitario": "",
-        "Subtotal": round(total, 0)
-    }])
-    df_show = pd.concat([df_calc, total_row], ignore_index=True)
-
     with col_out:
+        # Placeholder permite que las tarjetas se muestren arriba, aunque el total se calcule desde la tabla editable.
+        cards_placeholder = st.empty()
+
+        st.markdown("<div class='sonara-card-title'>Tabla editable de cubicación</div>", unsafe_allow_html=True)
         st.markdown(
+            f"<div class='result-note'>Tipo de cubicación detectado: <b>{cubicacion_tipo}</b>. Edita cantidades/precios o agrega partidas faltantes. Las tarjetas se actualizan al aplicar los cambios.</div>",
+            unsafe_allow_html=True
+        )
+
+        df_edit = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key=f"cub_editor_{sol.get('id','sin_id')}",
+            height=430,
+            column_config={
+                "Ítem": st.column_config.TextColumn("Ítem"),
+                "Unidad": st.column_config.TextColumn("Unidad"),
+                "Cantidad": st.column_config.NumberColumn("Cantidad", step=0.01),
+                "Precio unitario": st.column_config.NumberColumn("Precio unitario", step=100),
+                "Subtotal": st.column_config.NumberColumn("Subtotal", disabled=True),
+            }
+        )
+
+        df_calc, total = normalize_cubicacion_df(df_edit)
+
+        # Tarjetas actualizadas a partir de la única tabla editable
+        cards_placeholder.markdown(
             f"""
             <div class='sonara-card' style='margin-bottom:16px;'>
                 <div class='sonara-card-title'>Cubicación de: {nombre_solucion}</div>
                 <p style='color:#DCEBFF;margin:0;'>
                 Partida: <b>{codigo_partida}</b><br>
                 Requerimiento: <b>{req_label}</b><br>
-                Tipo cubicación: <b>{cubicacion_tipo}</b><br>Área bruta: <b>{area_bruta:.1f} m²</b> · Vanos descontados: <b>{area_vanos:.1f} m²</b> · Área neta: <b>{area:.1f} m²</b>
+                Tipo cubicación: <b>{cubicacion_tipo}</b><br>
+                Área bruta: <b>{area_bruta:.1f} m²</b> · Vanos descontados: <b>{area_vanos:.1f} m²</b> · Área neta: <b>{area:.1f} m²</b>
                 </p>
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
@@ -4532,11 +4765,21 @@ def app_cubicacion():
             unsafe_allow_html=True
         )
 
-        st.dataframe(df_show, use_container_width=True, hide_index=True, height=500)
+        # CSV con fila TOTAL, pero no se muestra como segunda tabla.
+        df_export = pd.concat([
+            df_calc,
+            pd.DataFrame([{
+                "Ítem": "TOTAL",
+                "Unidad": "",
+                "Cantidad": "",
+                "Precio unitario": "",
+                "Subtotal": round(total, 0)
+            }])
+        ], ignore_index=True)
 
         st.download_button(
             "⬇ Descargar cubicación CSV",
-            data=df_show.to_csv(index=False).encode("utf-8"),
+            data=df_export.to_csv(index=False).encode("utf-8"),
             file_name="sonara_cubicacion_solucion.csv",
             mime="text/csv",
             use_container_width=True
@@ -4563,6 +4806,7 @@ def app_cubicacion():
                 st.success("Cubicación guardada dentro de la solución del proyecto.")
             else:
                 st.warning("Cubicación asociada en sesión, pero no se pudo persistir en el proyecto. Revisa que la solución tenga ID.")
+
 
 
 def app_optimizador():
@@ -5639,18 +5883,13 @@ def get_project_options():
 
 def solution_status(solution, objetivo):
     indicador = str(objetivo.get("indicador", "Rw"))
-    meta = float(objetivo.get("valor", 0))
+    try:
+        meta = float(objetivo.get("valor", 0))
+    except Exception:
+        meta = 0.0
     sentido = str(objetivo.get("sentido", ">="))
 
-    value = None
-    if indicador in ["Rw", "DnT,w", "DnT,A", "D2m,nT,Atr", "RA"]:
-        value = solution.get("rw") or solution.get("dntw") or solution.get("valor")
-    elif indicador in ["L'nT,w", "Ln,w", "L'nT,w+CI"]:
-        value = solution.get("lntw") or solution.get("lnw") or solution.get("valor")
-    elif indicador in ["NR", "NC", "LAeq", "LAeq,nT"]:
-        value = solution.get("valor")
-    else:
-        value = solution.get("valor") or solution.get("rw") or solution.get("lntw")
+    value = solution_descriptor_value(solution, indicador)
 
     if value is None:
         return "Sin evaluación", None
@@ -5666,6 +5905,7 @@ def solution_status(solution, objetivo):
         return ("Cumple" if ok else "No cumple"), delta
     except Exception:
         return "Sin evaluación", None
+
 
 
 def save_solution_to_project(project_id, solution):
@@ -6122,31 +6362,51 @@ def project_report_dataframe(project):
 
     for r in project_requirements(project):
         sols = r.get("soluciones", [])
+        objetivo_txt = f"{r.get('indicador','')} {r.get('sentido','')} {r.get('valor','')} {r.get('unidad','')}"
         if not sols:
             rows.append({
                 "Emisor": r.get("recinto_emisor", ""),
                 "Receptor": r.get("recinto_receptor", ""),
                 "Elemento": r.get("tipo_elemento", ""),
-                "Objetivo": f"{r.get('indicador','')} {r.get('sentido','')} {r.get('valor','')} {r.get('unidad','')}",
+                "Objetivo": objetivo_txt,
+                "Descriptor": r.get("indicador", ""),
                 "Solución": "Sin solución",
                 "Resultado": "",
                 "Estado": "Pendiente",
+                "Composición": "",
+                "Área neta [m²]": "",
+                "Área bruta [m²]": "",
+                "Vanos [m²]": "",
+                "Masa [kg/m²]": "",
+                "Espesor [mm]": "",
+                "Cubicación / partidas": "",
                 "Costo solución [CLP]": 0,
             })
         else:
             for s in sols:
                 estado, delta = solution_status(s, r)
-                costo = solution_cost(s)
-                total_general += costo
+                valor_eval = solution_descriptor_value(s, r.get("indicador", "Rw"))
+                cub = solution_cubicacion_summary(s)
+                costo = cub.get("total", 0)
+                total_general += float(costo or 0)
+
                 rows.append({
                     "Emisor": r.get("recinto_emisor", ""),
                     "Receptor": r.get("recinto_receptor", ""),
                     "Elemento": r.get("tipo_elemento", ""),
-                    "Objetivo": f"{r.get('indicador','')} {r.get('sentido','')} {r.get('valor','')} {r.get('unidad','')}",
+                    "Objetivo": objetivo_txt,
+                    "Descriptor": r.get("indicador", ""),
                     "Solución": s.get("nombre", ""),
-                    "Resultado": s.get("resultado_label", ""),
+                    "Resultado": f"{r.get('indicador','')} = {'' if valor_eval is None else round(float(valor_eval), 1)} dB | {s.get('resultado_label', '')}",
                     "Estado": estado,
-                    "Costo solución [CLP]": round(costo, 0),
+                    "Composición": s.get("composicion") or solution_composition_text(s),
+                    "Área neta [m²]": cub.get("area_neta", ""),
+                    "Área bruta [m²]": cub.get("area_bruta", ""),
+                    "Vanos [m²]": cub.get("area_vanos", ""),
+                    "Masa [kg/m²]": s.get("masa", ""),
+                    "Espesor [mm]": s.get("espesor", ""),
+                    "Cubicación / partidas": cub.get("items", ""),
+                    "Costo solución [CLP]": round(float(costo or 0), 0),
                 })
 
     df = pd.DataFrame(rows)
@@ -6158,13 +6418,22 @@ def project_report_dataframe(project):
                 "Receptor": "",
                 "Elemento": "",
                 "Objetivo": "",
+                "Descriptor": "",
                 "Solución": "TOTAL PROYECTO",
                 "Resultado": "",
                 "Estado": "",
+                "Composición": "",
+                "Área neta [m²]": "",
+                "Área bruta [m²]": "",
+                "Vanos [m²]": "",
+                "Masa [kg/m²]": "",
+                "Espesor [mm]": "",
+                "Cubicación / partidas": "",
                 "Costo solución [CLP]": round(total_general, 0),
             }])
         ], ignore_index=True)
     return df
+
 
 
 def app_project_calculator_embedded(project, requirement):
@@ -6834,3 +7103,4 @@ else:
         app_ayuda()
     else:
         placeholder(page)
+
