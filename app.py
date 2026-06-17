@@ -1172,7 +1172,7 @@ def sidebar(license_info=None):
         st.sidebar.markdown(html, unsafe_allow_html=True)
 
     st.sidebar.markdown(
-        f"<div class='sidebar-small' style='margin-top:20px;'>© 2026 SONARA<br>Versión {APP_VERSION}</div>",
+        f"<div class='sidebar-small' style='margin-top:20px;'>© 2026 SONARA DISEÑADO POR MAAB<br>Versión {APP_VERSION}</div>",
         unsafe_allow_html=True
     )
 
