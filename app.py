@@ -15,7 +15,7 @@ import secrets
 # v0.9.0 con motor acústico WALLS portado desde MATLAB
 # =========================================================
 
-APP_VERSION = "1.0.3 CUBICACION POR SOLUCION"
+APP_VERSION = "1.0.5 INFORME COSTOS + CUBICACION EDITABLE"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -4080,6 +4080,157 @@ def ai_recommendation_text(best, objetivo_rw, prioridad):
 
 
 
+
+def is_massive_or_simple_solution(sol):
+    """
+    Define cuándo una solución NO debe cubicarse como tabique liviano con montantes/soleras.
+    Ejemplos: hormigón, albañilería, acero, vidrio, panel simple masivo.
+    """
+    if not sol:
+        return False
+
+    desc = (str(sol.get("descripcion", "")) + " " + str(sol.get("tipo_elemento", "")) + " " + str(sol.get("tipo_calculo", ""))).lower()
+
+    massive_terms = [
+        "hormigón", "hormigon", "albañilería", "albanileria",
+        "bloque", "ladrillo", "acero", "vidrio", "ventana"
+    ]
+
+    if any(t in desc for t in massive_terms):
+        return True
+
+    layers_right = sol.get("layers_right", []) or []
+    layers_left = sol.get("layers_left", []) or []
+
+    all_names = " ".join([str(x.get("nombre", "")) for x in layers_left + layers_right]).lower()
+    if any(t in all_names for t in massive_terms):
+        return True
+
+    # Panel simple guardado: no debe agregar montantes/soleras si no hay segunda hoja.
+    if layers_left and not layers_right:
+        return True
+
+    return False
+
+
+def estimate_cubicacion_por_capas(layers_left, layers_right, area, waste=0.10, incluir_sellos=True, incluir_mano_obra=True):
+    """
+    Cubicación genérica por capas/materiales.
+    No agrega montantes, soleras, tornillos ni placas tipo tabique liviano.
+    Sirve para hormigón, albañilería, vidrio, acero, panel simple o soluciones masivas.
+    """
+    costs = sonara_cost_db()
+    rows = []
+
+    def add_row(item, unidad, cantidad, precio_unit):
+        cantidad = float(cantidad)
+        precio_unit = float(precio_unit or 0)
+        rows.append({
+            "Ítem": item,
+            "Unidad": unidad,
+            "Cantidad": round(cantidad, 2),
+            "Precio unitario": round(precio_unit, 0),
+            "Subtotal": round(cantidad * precio_unit, 0)
+        })
+
+    all_layers = (layers_left or []) + (layers_right or [])
+
+    for layer in all_layers:
+        nombre = layer.get("nombre", "Material")
+        mat = layer.get("material", {})
+        unidad = mat.get("unidad", "m²") or "m²"
+        precio = costs.get(nombre, {"precio": mat.get("precio", 0)}).get("precio", mat.get("precio", 0))
+        qty = layer_area_qty(area, 1, waste)
+
+        if unidad.lower() in ["m2", "m²"]:
+            add_row(nombre, "m²", qty, precio)
+        else:
+            add_row(nombre, unidad, qty, precio)
+
+    if incluir_sellos:
+        add_row("Sellos / tratamiento perimetral", "m", 0, 0)
+
+    if incluir_mano_obra:
+        precio_mo = costs.get("Mano de obra referencial", {"precio": 8500})["precio"]
+        add_row("Mano de obra referencial", "m²", area, precio_mo)
+
+    df = pd.DataFrame(rows)
+    total = float(df["Subtotal"].sum()) if not df.empty else 0.0
+    return df, total
+
+
+def normalize_cubicacion_df(df):
+    """
+    Limpia y recalcula subtotal desde Cantidad x Precio unitario.
+    Permite que el usuario agregue/edite ítems manualmente.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Ítem", "Unidad", "Cantidad", "Precio unitario", "Subtotal"]), 0.0
+
+    df = df.copy()
+    for col in ["Ítem", "Unidad", "Cantidad", "Precio unitario", "Subtotal"]:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[["Ítem", "Unidad", "Cantidad", "Precio unitario", "Subtotal"]].copy()
+
+    def num(x):
+        try:
+            if x == "" or pd.isna(x):
+                return 0.0
+            return float(x)
+        except Exception:
+            return 0.0
+
+    df["Cantidad"] = df["Cantidad"].apply(num)
+    df["Precio unitario"] = df["Precio unitario"].apply(num)
+    df["Subtotal"] = (df["Cantidad"] * df["Precio unitario"]).round(0)
+
+    # Permite mantener una fila manual con subtotal si cantidad/precio son 0 y subtotal fue ingresado.
+    total = float(df["Subtotal"].sum()) if "Subtotal" in df.columns else 0.0
+    return df, total
+
+
+def update_solution_cubicacion_in_project(solution_id, requirement_id, cubicacion):
+    """
+    Persiste la cubicación dentro de la solución guardada del proyecto activo.
+    """
+    pid, p = active_project()
+    if not pid or not p or not solution_id:
+        return False
+
+    projects = load_projects()
+    if pid not in projects:
+        return False
+
+    reqs = project_requirements(projects[pid])
+    updated = False
+
+    for r in reqs:
+        if requirement_id and r.get("id") != requirement_id:
+            continue
+        for s in r.get("soluciones", []):
+            if s.get("id") == solution_id:
+                s["cubicacion"] = cubicacion
+                updated = True
+                break
+
+    if updated:
+        projects[pid]["requerimientos"] = reqs
+        projects[pid]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        save_projects(projects)
+
+    return updated
+
+
+def solution_cost(sol):
+    try:
+        cub = sol.get("cubicacion", {}) if isinstance(sol, dict) else {}
+        return float(cub.get("total", 0) or 0)
+    except Exception:
+        return 0.0
+
+
 def reconstruct_layers_from_solution(layer_list, mats):
     """
     Reconstruye capas guardadas en una solución.
@@ -4270,7 +4421,9 @@ def app_cubicacion():
         perdida = st.slider("Pérdida de material [%]", min_value=0, max_value=30, value=10, key="cub_perdida_solucion") / 100.0
 
     # Cubicación según tipo de solución guardada
+    cubicacion_tipo = "Tabique liviano"
     if sol.get("componentes"):
+        cubicacion_tipo = "Solución compuesta"
         df, total = component_cubicacion_table(sol, area, waste=perdida)
         masa = sol.get("masa")
         espesor = sol.get("espesor")
@@ -4288,27 +4441,66 @@ def app_cubicacion():
         config = sol.get("configuracion", "Montante simple") or "Montante simple"
         absorbente = sol.get("absorbente", "Sin absorbente") or "Sin absorbente"
 
-        df, total = estimate_cubicacion_tabique(
-            layers_left,
-            layers_right,
-            area,
-            largo * cantidad,
-            alto,
-            camara,
-            config,
-            absorbente,
-            waste=perdida
-        )
+        if is_massive_or_simple_solution(sol):
+            cubicacion_tipo = "Por capas / solución masiva"
+            df, total = estimate_cubicacion_por_capas(
+                layers_left,
+                layers_right,
+                area,
+                waste=perdida,
+                incluir_sellos=True,
+                incluir_mano_obra=True
+            )
+        else:
+            cubicacion_tipo = "Tabique liviano con estructura"
+            df, total = estimate_cubicacion_tabique(
+                layers_left,
+                layers_right,
+                area,
+                largo * cantidad,
+                alto,
+                camara,
+                config,
+                absorbente,
+                waste=perdida
+            )
 
         masa = sol.get("masa")
         if masa is None:
             masa = system_mass(layers_left, layers_right)
         espesor = sol.get("espesor")
         if espesor is None:
-            espesor = system_thickness_double(layers_left, layers_right, camara)
+            if is_massive_or_simple_solution(sol):
+                espesor = sum(float(x.get("espesor", 0) or 0) for x in layers_left + layers_right)
+            else:
+                espesor = system_thickness_double(layers_left, layers_right, camara)
 
         masa_txt = f"{float(masa):.1f}"
         esp_txt = f"{float(espesor):.0f}"
+
+    # Editor de cubicación: permite agregar/quitar ítems faltantes según la solución real.
+    st.markdown("<div class='sonara-card-title'>Editar cubicación según solución real</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='result-note'>Tipo de cubicación detectado: <b>{cubicacion_tipo}</b>. Puedes editar cantidades, precios o agregar partidas faltantes antes de guardar.</div>",
+        unsafe_allow_html=True
+    )
+
+    df_edit = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key=f"cub_editor_{sol.get('id','sin_id')}",
+        column_config={
+            "Ítem": st.column_config.TextColumn("Ítem"),
+            "Unidad": st.column_config.TextColumn("Unidad"),
+            "Cantidad": st.column_config.NumberColumn("Cantidad", step=0.01),
+            "Precio unitario": st.column_config.NumberColumn("Precio unitario", step=100),
+            "Subtotal": st.column_config.NumberColumn("Subtotal", disabled=True),
+        }
+    )
+
+    df_calc, total = normalize_cubicacion_df(df_edit)
 
     total_row = pd.DataFrame([{
         "Ítem": "TOTAL",
@@ -4317,7 +4509,7 @@ def app_cubicacion():
         "Precio unitario": "",
         "Subtotal": round(total, 0)
     }])
-    df_show = pd.concat([df, total_row], ignore_index=True)
+    df_show = pd.concat([df_calc, total_row], ignore_index=True)
 
     with col_out:
         st.markdown(
@@ -4327,7 +4519,7 @@ def app_cubicacion():
                 <p style='color:#DCEBFF;margin:0;'>
                 Partida: <b>{codigo_partida}</b><br>
                 Requerimiento: <b>{req_label}</b><br>
-                Área bruta: <b>{area_bruta:.1f} m²</b> · Vanos descontados: <b>{area_vanos:.1f} m²</b> · Área neta: <b>{area:.1f} m²</b>
+                Tipo cubicación: <b>{cubicacion_tipo}</b><br>Área bruta: <b>{area_bruta:.1f} m²</b> · Vanos descontados: <b>{area_vanos:.1f} m²</b> · Área neta: <b>{area:.1f} m²</b>
                 </p>
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
@@ -4351,16 +4543,26 @@ def app_cubicacion():
         )
 
         if st.button("💾 Asociar cubicación a la solución", use_container_width=True, key="cub_save_to_solution"):
-            sol["cubicacion"] = {
+            cubicacion_payload = {
                 "codigo_partida": codigo_partida,
+                "tipo_cubicacion": cubicacion_tipo,
                 "area_bruta": float(area_bruta),
                 "area_vanos": float(area_vanos),
                 "area_neta": float(area),
                 "total": float(total),
                 "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "items": df_calc.to_dict(orient="records"),
             }
+            sol["cubicacion"] = cubicacion_payload
             st.session_state["selected_solution_for_cubicacion"] = sol
-            st.success("Cubicación asociada temporalmente a la solución. En la siguiente versión se persistirá dentro del proyecto.")
+
+            req_id = req.get("id") if isinstance(req, dict) else None
+            ok = update_solution_cubicacion_in_project(sol.get("id"), req_id, cubicacion_payload)
+
+            if ok:
+                st.success("Cubicación guardada dentro de la solución del proyecto.")
+            else:
+                st.warning("Cubicación asociada en sesión, pero no se pudo persistir en el proyecto. Revisa que la solución tenga ID.")
 
 
 def app_optimizador():
@@ -5279,17 +5481,22 @@ def make_requirement_id(req):
 
 
 def project_requirements(project):
+    """
+    Devuelve solo los elementos/requerimientos creados explícitamente por el usuario.
+    Antes se convertía el objetivo preliminar del proyecto en un requerimiento automático,
+    lo que generaba un elemento fantasma en la matriz al crear un proyecto nuevo.
+    """
     reqs = project.get("requerimientos", [])
     if not isinstance(reqs, list):
-        reqs = []
-    # Compatibilidad con proyectos antiguos
-    old_req = project.get("requerimiento_activo") or project.get("objetivo")
-    if old_req and not reqs:
-        old_req = dict(old_req)
-        old_req.setdefault("id", make_requirement_id(old_req))
-        old_req.setdefault("soluciones", project.get("soluciones", []))
-        reqs = [old_req]
-    return reqs
+        return []
+
+    clean = []
+    for r in reqs:
+        if not isinstance(r, dict):
+            continue
+        r.setdefault("soluciones", [])
+        clean.append(r)
+    return clean
 
 
 def upsert_requirement(project_id, req):
@@ -5330,14 +5537,22 @@ def upsert_requirement(project_id, req):
 def active_requirement(project):
     req_id = st.session_state.get("active_requirement_id")
     reqs = project_requirements(project)
+
     for req in reqs:
         if req.get("id") == req_id:
             return req
-    if project.get("requerimiento_activo"):
-        return project.get("requerimiento_activo")
+
+    active = project.get("requerimiento_activo")
+    if isinstance(active, dict):
+        active_id = active.get("id")
+        for req in reqs:
+            if req.get("id") == active_id:
+                return req
+
     if reqs:
         return reqs[-1]
-    return project.get("objetivo", {})
+
+    return None
 
 
 def all_project_solutions(project):
@@ -5846,6 +6061,29 @@ def delete_room(project_id, room_id):
     return True
 
 
+
+def delete_requirement(project_id, requirement_id):
+    projects = load_projects()
+    if project_id not in projects:
+        return False
+
+    reqs = [r for r in project_requirements(projects[project_id]) if r.get("id") != requirement_id]
+    projects[project_id]["requerimientos"] = reqs
+
+    active = projects[project_id].get("requerimiento_activo", {})
+    if isinstance(active, dict) and active.get("id") == requirement_id:
+        projects[project_id]["requerimiento_activo"] = reqs[-1] if reqs else {}
+
+    projects[project_id]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    save_projects(projects)
+
+    if st.session_state.get("active_requirement_id") == requirement_id:
+        st.session_state.pop("active_requirement_id", None)
+        st.session_state.pop("active_requirement", None)
+
+    return True
+
+
 def requirement_matrix_dataframe(project):
     reqs = project_requirements(project)
     rows = []
@@ -5880,6 +6118,8 @@ def requirement_matrix_dataframe(project):
 
 def project_report_dataframe(project):
     rows = []
+    total_general = 0.0
+
     for r in project_requirements(project):
         sols = r.get("soluciones", [])
         if not sols:
@@ -5891,10 +6131,13 @@ def project_report_dataframe(project):
                 "Solución": "Sin solución",
                 "Resultado": "",
                 "Estado": "Pendiente",
+                "Costo solución [CLP]": 0,
             })
         else:
             for s in sols:
                 estado, delta = solution_status(s, r)
+                costo = solution_cost(s)
+                total_general += costo
                 rows.append({
                     "Emisor": r.get("recinto_emisor", ""),
                     "Receptor": r.get("recinto_receptor", ""),
@@ -5903,8 +6146,25 @@ def project_report_dataframe(project):
                     "Solución": s.get("nombre", ""),
                     "Resultado": s.get("resultado_label", ""),
                     "Estado": estado,
+                    "Costo solución [CLP]": round(costo, 0),
                 })
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = pd.concat([
+            df,
+            pd.DataFrame([{
+                "Emisor": "",
+                "Receptor": "",
+                "Elemento": "",
+                "Objetivo": "",
+                "Solución": "TOTAL PROYECTO",
+                "Resultado": "",
+                "Estado": "",
+                "Costo solución [CLP]": round(total_general, 0),
+            }])
+        ], ignore_index=True)
+    return df
 
 
 def app_project_calculator_embedded(project, requirement):
@@ -5924,7 +6184,7 @@ def app_project_calculator_embedded(project, requirement):
         unsafe_allow_html=True
     )
 
-    objetivo = requirement or project.get("requerimiento_activo") or project.get("objetivo", {})
+    objetivo = requirement or project.get("requerimiento_activo") or {}
     indicador = objetivo.get("indicador", "Rw")
     tipo_elemento_req = objetivo.get("tipo_elemento", "Paramento vertical")
 
@@ -6031,7 +6291,8 @@ def app_proyectos():
                     projects = load_projects()
                     projects[pid]["cliente"] = cliente
                     projects[pid].setdefault("recintos", [])
-                    projects[pid].setdefault("requerimientos", [])
+                    projects[pid]["requerimientos"] = project_requirements(projects[pid])
+                    projects[pid]["requerimiento_activo"] = {}
                     save_projects(projects)
                     st.session_state["project_nombre"] = nombre
                     st.session_state["project_cliente"] = cliente
@@ -6188,6 +6449,22 @@ def app_proyectos():
                 else:
                     st.dataframe(df_matrix, use_container_width=True, hide_index=True, height=380)
 
+                    reqs_delete = project_requirements(active_project()[1])
+                    labels_delete = [
+                        f"{r.get('recinto_emisor','')} → {r.get('recinto_receptor','')} · {r.get('tipo_elemento','')} · {r.get('indicador','')} {r.get('sentido','')} {r.get('valor','')} {r.get('unidad','')}"
+                        for r in reqs_delete
+                    ]
+
+                    with st.expander("🗑 Eliminar elemento de la matriz", expanded=False):
+                        del_label = st.selectbox("Elemento a eliminar", [""] + labels_delete, key="matrix_delete_select")
+                        if del_label:
+                            idx_del = labels_delete.index(del_label)
+                            req_del = reqs_delete[idx_del]
+                            if st.button("Eliminar elemento seleccionado", use_container_width=True, key="matrix_delete_btn"):
+                                delete_requirement(pid, req_del.get("id"))
+                                st.success("Elemento eliminado de la matriz.")
+                                st.rerun()
+
     # 4. Diseñar
     with tab_diseno:
         pid, p = active_project()
@@ -6211,7 +6488,10 @@ def app_proyectos():
                 req = reqs[labels.index(selected_label)]
                 st.session_state["active_requirement_id"] = req.get("id")
                 st.session_state["active_requirement"] = req
-                app_project_calculator_embedded(p, req)
+                if req:
+                    app_project_calculator_embedded(p, req)
+                else:
+                    st.warning("Primero agrega un elemento a diseñar en la matriz acústica.")
 
     # 5. Soluciones
     with tab_sol:
@@ -6314,6 +6594,24 @@ def app_proyectos():
             if df_report.empty:
                 st.info("No hay información suficiente para informe.")
             else:
+                total_costo = 0.0
+                if "Costo solución [CLP]" in df_report.columns:
+                    try:
+                        total_costo = float(df_report[df_report["Solución"] == "TOTAL PROYECTO"]["Costo solución [CLP]"].iloc[0])
+                    except Exception:
+                        total_costo = float(pd.to_numeric(df_report["Costo solución [CLP]"], errors="coerce").fillna(0).sum())
+
+                st.markdown(
+                    f"""
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
+                        <div class="result-card"><div class="result-label">Elementos</div><div class="result-value">{max(len(df_report)-1,0)}</div><div class="result-unit">filas</div></div>
+                        <div class="result-card"><div class="result-label">Costo total</div><div class="result-value" style="font-size:32px;">${total_costo:,.0f}</div><div class="result-unit">CLP</div></div>
+                        <div class="result-card"><div class="result-label">Estado</div><div class="result-value" style="font-size:24px;">Informe</div><div class="result-unit">preliminar</div></div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
                 st.dataframe(df_report, use_container_width=True, hide_index=True, height=480)
                 st.download_button("⬇ Descargar informe CSV", data=df_report.to_csv(index=False).encode("utf-8"), file_name="sonara_informe_preliminar.csv", mime="text/csv", use_container_width=True)
 
