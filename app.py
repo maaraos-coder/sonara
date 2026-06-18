@@ -15,7 +15,7 @@ import secrets
 # v0.9.0 con motor acústico WALLS portado desde MATLAB
 # =========================================================
 
-APP_VERSION = "1.2.2 LIMPIA CUBICACION FIX"
+APP_VERSION = "BETA"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -1277,7 +1277,7 @@ def login_page():
     with col2:
         st.markdown("""
         <div class='card'>
-            <div class='card-title'>SONARA 1.0 COMERCIAL</div>
+            <div class='card-title'>SONARA VERSIÓN BETA</div>
             <div class='card-text'>
                 Plataforma de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
             </div>
