@@ -1290,34 +1290,37 @@ def login_page():
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    p1, p2, p3 = st.columns(3, gap="large")
-
-    p1.markdown("""
-    <div class='plan'>
-        <div class='plan-title'>TRIAL</div>
-        <div class='plan-price'>3 días</div>
-        <div class='plan-text'>Acceso completo para evaluar SONARA.</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    p2.markdown("""
-    <div class='plan academy'>
-        <div class='plan-title academy'>ACADEMY</div>
-        <div class='plan-price'>Docencia</div>
-        <div class='plan-text'>Licencias para cursos, diplomados y talleres.</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    p3.markdown("""
-    <div class='plan premium'>
-        <div class='plan-title premium'>PREMIUM</div>
-        <div class='plan-price'>USD 15/mes</div>
-        <div class='plan-text'>Uso profesional con proyectos e informes.</div>
-    </div>
-    """, unsafe_allow_html=True)
+        
+    SHOW_LICENSE_CARDS = False
+    
+    if SHOW_LICENSE_CARDS:
+        st.markdown("<br>", unsafe_allow_html=True)
+    
+        p1, p2, p3 = st.columns(3, gap="large")
+    
+        p1.markdown("""
+        <div class='plan'>
+            <div class='plan-title'>TRIAL</div>
+            <div class='plan-price'>3 días</div>
+            <div class='plan-text'>Acceso completo para evaluar SONARA.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+        p2.markdown("""
+        <div class='plan academy'>
+            <div class='plan-title academy'>ACADEMY</div>
+            <div class='plan-price'>Docencia</div>
+            <div class='plan-text'>Licencias para cursos, diplomados y talleres.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+        p3.markdown("""
+        <div class='plan premium'>
+            <div class='plan-title premium'>PREMIUM</div>
+            <div class='plan-price'>USD 15/mes</div>
+            <div class='plan-text'>Uso profesional con proyectos e informes.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # =========================================================
