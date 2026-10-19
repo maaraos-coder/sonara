@@ -2,7 +2,7 @@ services:
   - type: web
     name: sonara
     runtime: docker
-    plan: starter
+    plan: free
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
