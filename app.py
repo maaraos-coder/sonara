@@ -19,11 +19,14 @@ from academy_access import (
 )
 from iso_design import (
     OCTAVE_EQUIPMENT,
+    THIRD_OCTAVE_100_3150,
     airborne_single_numbers,
     compare_predicted_measured,
     dnt_from_apparent_curve,
     facade_single_numbers,
+    facade_spectral_prediction,
     impact_rating,
+    manual_airborne_curve,
     reverberation_prediction,
     service_equipment_airborne,
     transmission_average_db,
@@ -33,6 +36,8 @@ from material_catalog import (
     calculation_materials,
     catalog_available,
     catalog_summary,
+    floor_cover_catalog,
+    floor_cover_spectrum,
 )
 from sonara_engine import (
     ENGINE_ID,
@@ -3743,8 +3748,8 @@ def app_impacto():
     st.markdown(
         """
         <div class='result-note'>
-        Módulo para estimación de ruido de impacto. Incluye modo simplificado y modo ISO 12354-2 preliminar,
-        con piso flotante masa-resorte-masa, cielo inferior, normalización L'nT y flanqueos por bandas.
+        Módulo para estimación de ruido de impacto. Incluye 674 espectros ΔL de revestimientos del catálogo,
+        modo simplificado e ISO 12354-2, cielo inferior, normalización L'nT y flanqueos por bandas.
         </div>
         """,
         unsafe_allow_html=True
@@ -3781,31 +3786,60 @@ def app_impacto():
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='sonara-card-title'>Revestimiento superior</div>", unsafe_allow_html=True)
 
-        tipo_piso = st.selectbox(
-            "Tipo de piso / revestimiento",
-            [
-                "Sin revestimiento",
-                "Vinílico / piso delgado",
-                "Alfombra gruesa",
-                "Piso flotante básico",
-                "Sobrelosa flotante",
-                "Piso flotante físico",
-            ],
-            index=0
-        )
-
+        use_floor_catalog = st.radio(
+            "Origen del revestimiento",
+            ["Catálogo acústico medido", "Modelo genérico / físico"],
+            horizontal=True,
+            key="impact_floor_source",
+        ) == "Catálogo acústico medido"
+        floor_cover_entity_id = None
         f0_piso = None
-        if tipo_piso == "Piso flotante físico":
-            col_a, col_b = st.columns(2)
-            with col_a:
-                masa_sobrelosa = st.number_input("Masa superficial sobrelosa m' [kg/m²]", value=90.0, min_value=5.0, step=5.0)
-            with col_b:
-                rigidez_dinamica = st.number_input("Rigidez dinámica s' [MN/m³]", value=15.0, min_value=1.0, step=1.0)
-            f0_piso = (1.0 / (2.0 * np.pi)) * np.sqrt((rigidez_dinamica * 1e6) / masa_sobrelosa)
-            st.markdown(
-                f"<div class='result-note'>Frecuencia propia estimada del piso flotante: <b>{f0_piso:.0f} Hz</b></div>",
-                unsafe_allow_html=True
+
+        if use_floor_catalog:
+            covers = floor_cover_catalog()
+            labels = covers["display_name"].tolist()
+            selected_cover = st.selectbox(
+                "Revestimiento del catálogo",
+                labels,
+                index=next(
+                    (i for i, label in enumerate(labels) if label.strip().lower() not in {"aucun", "none", "ninguno"}),
+                    0,
+                ),
+                key="impact_floor_catalog_item",
             )
+            cover_row = covers.loc[covers["display_name"] == selected_cover].iloc[0]
+            floor_cover_entity_id = int(cover_row["entity_id"])
+            tipo_piso = selected_cover
+            source_label = "con base elástica" if bool(cover_row.get("has_underlay")) else "sin base elástica"
+            st.markdown(
+                f"<div class='result-note'><b>{cover_row.get('cover_type') or 'Sin categoría'}</b> · "
+                f"{source_label} · espectro ΔL medido de 20 Hz a 10 kHz.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            tipo_piso = st.selectbox(
+                "Tipo de piso / revestimiento",
+                [
+                    "Sin revestimiento",
+                    "Vinílico / piso delgado",
+                    "Alfombra gruesa",
+                    "Piso flotante básico",
+                    "Sobrelosa flotante",
+                    "Piso flotante físico",
+                ],
+                index=0,
+            )
+            if tipo_piso == "Piso flotante físico":
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    masa_sobrelosa = st.number_input("Masa superficial sobrelosa m' [kg/m²]", value=90.0, min_value=5.0, step=5.0)
+                with col_b:
+                    rigidez_dinamica = st.number_input("Rigidez dinámica s' [MN/m³]", value=15.0, min_value=1.0, step=1.0)
+                f0_piso = (1.0 / (2.0 * np.pi)) * np.sqrt((rigidez_dinamica * 1e6) / masa_sobrelosa)
+                st.markdown(
+                    f"<div class='result-note'>Frecuencia propia estimada del piso flotante: <b>{f0_piso:.0f} Hz</b></div>",
+                    unsafe_allow_html=True,
+                )
 
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='sonara-card-title'>Cielo inferior</div>", unsafe_allow_html=True)
@@ -3914,7 +3948,10 @@ def app_impacto():
                 )
 
     freqs, ln0_curve = impact_reference_curve_from_lnw(ln0w)
-    delta_piso = delta_floor_curve(tipo_piso, freqs, f0_piso)
+    if floor_cover_entity_id is not None:
+        delta_piso = floor_cover_spectrum(floor_cover_entity_id, freqs).to_numpy(dtype=float)
+    else:
+        delta_piso = delta_floor_curve(tipo_piso, freqs, f0_piso)
     delta_cielo = ceiling_delta_curve(tipo_cielo, freqs)
 
     ln_direct = ln0_curve - delta_piso - delta_cielo
@@ -3950,6 +3987,8 @@ def app_impacto():
     impact_numbers_t = impact_rating(freqs, lnT)
     ci50_t = impact_numbers_t.get("ci50_2500")
     lnt50 = None if ci50_t is None else lntw + ci50_t
+    treated_floor_lnw = impact_rating(freqs, ln0_curve - delta_piso)["weighted"]
+    delta_lw = float(ln0w - treated_floor_lnw)
 
     with col_results:
         st.markdown(
@@ -3990,7 +4029,7 @@ def app_impacto():
             f"""
             <div class='result-note'>
             Método: <b>{modo_impacto}</b> · {masa_txt}Ln,0,w = {ln0w:.1f} dB · 
-            ΔLw piso aprox. = {np.mean(delta_piso):.1f} dB · 
+            ΔLw piso = {delta_lw:.1f} dB ·
             Mejora cielo aprox. = {np.mean(delta_cielo):.1f} dB. En ruido de impacto, <b>menor es mejor</b>.
             Las bandas 50–80 Hz son proyectadas por el modelo y deben contrastarse con datos de ensayo.
             </div>
@@ -4134,6 +4173,8 @@ def app_impacto():
             "descripcion": f"{modo_impacto} · {tipo_piso} · {tipo_cielo}",
             "modo": modo_impacto,
             "tipo_piso": tipo_piso,
+            "revestimiento_catalogo_id": floor_cover_entity_id,
+            "delta_lw_piso": delta_lw,
             "tipo_cielo": tipo_cielo,
             "ln0w": float(ln0w),
         }, key_prefix="save_impact")
@@ -6955,7 +6996,7 @@ def _iso_design_notice():
 def app_fachada_iso():
     st.markdown("<div class='sonara-card-title'>Fachada · predicción de proyecto</div>", unsafe_allow_html=True)
     _iso_design_notice()
-    st.caption("Modelo simplificado basado en el enfoque de EN ISO 12354-3. Resultados de diseño, no medición en obra.")
+    st.caption("Combinación espectral por factores de transmisión, basada en EN ISO 12354-3. Resultados de diseño, no medición en obra.")
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -6967,6 +7008,13 @@ def app_fachada_iso():
     with c4:
         lden = st.number_input("Nivel exterior Lden [dB]", 30.0, 100.0, 65.0, 1.0, key="fac_lden")
 
+    materials = material_db()
+    facade_materials = [
+        name for name, material in materials.items()
+        if material.get("grupo") in {"panel", "vidrio"}
+        and float(material.get("dens", 0.0) or 0.0) > 0.0
+        and float(material.get("E", 0.0) or 0.0) > 0.0
+    ]
     count = st.slider("Cantidad de componentes", 1, 6, 2, key="fac_count")
     defaults = [
         ("Muro opaco", max(facade_area - 3.0, 1.0), 50.0, -5.0),
@@ -6975,26 +7023,89 @@ def app_fachada_iso():
         ("Rejilla", 0.0, 20.0, -2.0),
     ]
     components = []
+    component_rows = []
     st.markdown("##### Componentes de la fachada")
     for idx in range(count):
         default = defaults[idx] if idx < len(defaults) else (f"Componente {idx + 1}", 0.0, 35.0, -5.0)
-        cols = st.columns([1.6, 1, 1, 1])
-        with cols[0]:
-            name = st.text_input("Componente", default[0], key=f"fac_name_{idx}")
-        with cols[1]:
-            area = st.number_input("Área [m²]", 0.0, 500.0, float(default[1]), 0.25, key=f"fac_comp_area_{idx}")
-        with cols[2]:
-            rw = st.number_input("Rw [dB]", 5.0, 90.0, float(default[2]), 1.0, key=f"fac_rw_{idx}")
-        with cols[3]:
-            ctr = st.number_input("Ctr [dB]", -20.0, 5.0, float(default[3]), 1.0, key=f"fac_ctr_{idx}")
-        components.append({"name": name, "area": area, "rw": rw, "ctr": ctr})
+        with st.expander(default[0], expanded=idx < 2):
+            cols = st.columns([1.4, 0.8, 1.2])
+            name = cols[0].text_input("Componente", default[0], key=f"fac_name_{idx}")
+            area = cols[1].number_input("Área [m²]", 0.0, 500.0, float(default[1]), 0.25, key=f"fac_comp_area_{idx}")
+            calculation_mode = cols[2].selectbox(
+                "Origen acústico",
+                ["SONARA-PHYSICS", "Manual Rw/Ctr"],
+                index=0,
+                key=f"fac_mode_{idx}",
+            )
+
+            if calculation_mode == "SONARA-PHYSICS":
+                preferred = "Vidrio monolítico" if idx == 1 else "Hormigón armado"
+                preferred_index = facade_materials.index(preferred) if preferred in facade_materials else 0
+                material_name = st.selectbox(
+                    "Material",
+                    facade_materials,
+                    index=preferred_index,
+                    key=f"fac_material_{idx}",
+                )
+                material = materials[material_name]
+                thickness_default = max(float(material.get("espesor", 10.0) or 10.0), 0.1)
+                thickness = st.number_input(
+                    "Espesor [mm]",
+                    min_value=0.1,
+                    max_value=1000.0,
+                    value=thickness_default,
+                    step=0.5,
+                    key=f"fac_thickness_{idx}",
+                )
+                fine = np.linspace(45.0, 6000.0, 1191)
+                fine_curve, _, _, _, _ = walls_panel_tl(material, thickness, fine)
+                third_freqs, third_curve = third_octave_from_fine(fine, fine_curve)
+                numbers = airborne_single_numbers(third_freqs, third_curve)
+                rw = float(numbers["weighted"])
+                c_value = float(numbers["c"])
+                ctr = float(numbers["ctr"])
+                curve_freqs = third_freqs
+                curve = third_curve
+                detail = f"{material_name} · {thickness:.1f} mm"
+                st.caption(f"Resultado del componente: Rw {rw:.0f} dB · C {c_value:+.0f} dB · Ctr {ctr:+.0f} dB")
+            else:
+                manual_cols = st.columns(2)
+                rw = manual_cols[0].number_input("Rw [dB]", 5.0, 90.0, float(default[2]), 1.0, key=f"fac_rw_{idx}")
+                ctr = manual_cols[1].number_input("Ctr [dB]", -20.0, 0.0, float(default[3]), 1.0, key=f"fac_ctr_{idx}")
+                curve_freqs = np.asarray(THIRD_OCTAVE_100_3150, dtype=float)
+                curve = manual_airborne_curve(rw, ctr, curve_freqs)
+                numbers = airborne_single_numbers(curve_freqs, curve)
+                c_value = float(numbers["c"])
+                ctr = float(numbers["ctr"])
+                detail = "Curva ISO 717 de proyecto reconstruida desde Rw/Ctr"
+
+            components.append({
+                "name": name,
+                "area": area,
+                "rw": rw,
+                "c": c_value,
+                "ctr": ctr,
+                "freqs": np.asarray(curve_freqs, dtype=float),
+                "curve": np.asarray(curve, dtype=float),
+                "mode": calculation_mode,
+                "detail": detail,
+            })
+            component_rows.append({
+                "Componente": name,
+                "Área [m²]": area,
+                "Origen": calculation_mode,
+                "Detalle": detail,
+                "Rw [dB]": rw,
+                "C [dB]": c_value,
+                "Ctr [dB]": ctr,
+            })
 
     used_area = sum(item["area"] for item in components)
     if abs(used_area - facade_area) > 0.05:
         st.warning(f"La suma de componentes es {used_area:.2f} m² y no coincide con el área total ({facade_area:.2f} m²). El cálculo usa la suma declarada.")
 
     try:
-        result = facade_single_numbers(components, volume, facade_area, shape, lden)
+        result = facade_spectral_prediction(components, volume, facade_area, shape, lden)
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -7002,17 +7113,39 @@ def app_fachada_iso():
     cards = st.columns(5)
     values = [
         ("Rw compuesto", result["rw_composite"], "dB"),
+        ("C / Ctr", result["c_composite"], f"/ {result['ctr_composite']:.0f} dB"),
         ("RA,tr compuesto", result["ratr_composite"], "dB"),
         ("Corrección geométrica", result["geometry_correction"], "dB"),
         ("D2m,nT,Atr", result["dnt_a_tr"], "dB"),
-        ("Nivel interior estimado", result["indoor_from_lden"], "dB"),
     ]
     for col, (label, value, unit) in zip(cards, values):
         with col:
             st.metric(label, f"{value:.1f} {unit}")
 
-    df = pd.DataFrame(components)
-    df.columns = ["Componente", "Área [m²]", "Rw [dB]", "Ctr [dB]"]
+    st.metric("Nivel interior estimado", f"{result['indoor_from_lden']:.1f} dB(A)")
+
+    fig = go.Figure()
+    for component in components:
+        fig.add_trace(go.Scatter(
+            x=component["freqs"],
+            y=component["curve"],
+            mode="lines",
+            name=component["name"],
+            line=dict(width=1.5, dash="dot"),
+        ))
+    fig.add_trace(go.Scatter(
+        x=result["freqs"],
+        y=result["curve"],
+        mode="lines+markers",
+        name="Fachada compuesta",
+        line=dict(color="#00E08A", width=4),
+    ))
+    fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=[100, 125, 250, 500, 1000, 2000, 3150])
+    fig.update_yaxes(title="R [dB]")
+    fig.update_layout(template="plotly_dark", height=430, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    st.plotly_chart(fig, use_container_width=True)
+
+    df = pd.DataFrame(component_rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.download_button("⬇ Descargar cálculo de fachada", df.to_csv(index=False).encode("utf-8"), "sonara_fachada.csv", "text/csv", key="fac_download")
     solution_save_widget({
@@ -7023,8 +7156,10 @@ def app_fachada_iso():
         "d2mnt_atr": float(result["dnt_a_tr"]),
         "rw_compuesto": float(result["rw_composite"]),
         "ratr_compuesto": float(result["ratr_composite"]),
-        "componentes": components,
-        "descripcion": "Predicción simplificada de fachada; clasificación ISO/TS 19488 pendiente del estudiante.",
+        "frecuencias": list(map(float, result["freqs"])),
+        "curva": list(map(float, result["curve"])),
+        "componentes": component_rows,
+        "descripcion": "Predicción espectral de fachada; clasificación ISO/TS 19488 pendiente del estudiante.",
     }, key_prefix="save_facade")
 
 

@@ -7,10 +7,13 @@ from iso_design import (
     IMPACT_REFERENCE,
     THIRD_OCTAVE_100_3150,
     airborne_rating,
+    airborne_single_numbers,
     compare_predicted_measured,
     dnt_from_apparent_curve,
     facade_single_numbers,
+    facade_spectral_prediction,
     impact_rating,
+    manual_airborne_curve,
     reverberation_prediction,
     service_equipment_airborne,
     transmission_average_db,
@@ -50,6 +53,30 @@ class IsoDesignTests(unittest.TestCase):
         self.assertAlmostEqual(result["rw_composite"], 37.8189, places=3)
         self.assertAlmostEqual(result["dnt_a_tr"], 31.5600, places=3)
         self.assertAlmostEqual(result["indoor_from_lden"], 33.4400, places=3)
+
+    def test_facade_spectral_prediction_combines_transmission_factors(self):
+        opaque = np.full_like(THIRD_OCTAVE_100_3150, 50.0, dtype=float)
+        window = np.full_like(THIRD_OCTAVE_100_3150, 30.0, dtype=float)
+        result = facade_spectral_prediction(
+            [
+                {"area": 9.0, "freqs": THIRD_OCTAVE_100_3150, "curve": opaque},
+                {"area": 3.0, "freqs": THIRD_OCTAVE_100_3150, "curve": window},
+            ],
+            volume=35.0,
+            facade_area=12.0,
+            lden=65.0,
+        )
+        expected_curve = -10.0 * np.log10((9.0 * 10.0 ** -5 + 3.0 * 10.0 ** -3) / 12.0)
+        self.assertTrue(np.allclose(result["curve"], expected_curve))
+        self.assertAlmostEqual(
+            result["indoor_from_lden"], 65.0 - result["dnt_a_tr"], places=9
+        )
+
+    def test_manual_facade_curve_preserves_requested_rw(self):
+        curve = manual_airborne_curve(42.0, -6.0)
+        result = airborne_single_numbers(THIRD_OCTAVE_100_3150, curve)
+        self.assertEqual(result["weighted"], 42)
+        self.assertEqual(result["ctr"], -6)
 
     def test_equipment_same_room_returns_seven_finite_bands(self):
         result = service_equipment_airborne(

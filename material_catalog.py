@@ -164,3 +164,64 @@ def browse_catalog(
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         return pd.read_sql_query(sql, connection, params=params)
 
+
+@lru_cache(maxsize=1)
+def floor_cover_catalog() -> pd.DataFrame:
+    """Return the 674 floor coverings and their mechanical metadata."""
+    if not catalog_available():
+        return pd.DataFrame()
+    database = catalog_database_path()
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        frame = pd.read_sql_query(
+            """
+            SELECT e.entity_id, e.name, e.manufacturer, e.cover_type,
+                   e.has_underlay, p.thickness_m, p.underlay_thickness_m,
+                   p.density_kg_m3, p.underlay_density_kg_m3,
+                   p.elastic_modulus_pa, p.underlay_elastic_modulus_pa,
+                   p.damping, p.underlay_damping
+            FROM canonical_entities e
+            JOIN floor_cover_properties p USING(entity_id)
+            WHERE e.dataset='FloorCover'
+            ORDER BY e.name, e.manufacturer, e.entity_id
+            """,
+            connection,
+        )
+    manufacturer = frame["manufacturer"].fillna("").astype(str).str.strip()
+    manufacturer = manufacturer.mask(manufacturer.str.lower().isin(["", "empty", "generic"]), "")
+    frame["display_name"] = frame["name"].fillna("Revestimiento sin nombre").astype(str)
+    frame.loc[manufacturer != "", "display_name"] += " · " + manufacturer[manufacturer != ""]
+    duplicated = frame["display_name"].duplicated(keep=False)
+    frame.loc[duplicated, "display_name"] += " · ID " + frame.loc[duplicated, "entity_id"].astype(str)
+    return frame
+
+
+@lru_cache(maxsize=2048)
+def _floor_cover_spectrum_rows(entity_id: int) -> tuple[tuple[float, float], ...]:
+    database = catalog_database_path()
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT frequency_hz, value_db
+            FROM spectra
+            WHERE entity_id=? AND spectrum_kind='IsolationGain'
+            ORDER BY frequency_hz
+            """,
+            (int(entity_id),),
+        ).fetchall()
+    return tuple((float(frequency), float(value or 0.0)) for frequency, value in rows)
+
+
+def floor_cover_spectrum(entity_id: int, frequencies) -> pd.Series:
+    """Interpolate the catalogue isolation-gain spectrum on target bands."""
+    import numpy as np
+
+    rows = _floor_cover_spectrum_rows(int(entity_id))
+    if not rows:
+        raise ValueError("El revestimiento seleccionado no contiene espectro ΔL.")
+    source_frequencies = np.asarray([row[0] for row in rows], dtype=float)
+    source_values = np.asarray([row[1] for row in rows], dtype=float)
+    target = np.asarray(frequencies, dtype=float)
+    if target.min() < source_frequencies.min() or target.max() > source_frequencies.max():
+        raise ValueError("Las bandas solicitadas exceden el espectro del revestimiento.")
+    return pd.Series(np.interp(target, source_frequencies, source_values), index=target)
+

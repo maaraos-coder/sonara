@@ -246,6 +246,96 @@ def facade_single_numbers(parts, volume, facade_area, shape_correction=0.0, lden
     }
 
 
+def manual_airborne_curve(rw, ctr=0.0, freqs=None):
+    """Build an explicit design spectrum for a manually entered Rw/Ctr pair.
+
+    The ISO 717-1 reference curve is anchored at Rw. A smooth low-frequency
+    tilt represents the supplied traffic adaptation term. It is a transparent
+    surrogate for components whose measured spectrum is unavailable.
+    """
+    target = THIRD_OCTAVE_100_3150 if freqs is None else np.asarray(freqs, dtype=float)
+    base = np.interp(target, THIRD_OCTAVE_100_3150, AIRBORNE_REFERENCE + (float(rw) - 52.0))
+    requested_ctr = int(round(float(ctr)))
+    if requested_ctr < -20 or requested_ctr > 0:
+        raise ValueError("La reconstrucción manual admite Ctr entre -20 y 0 dB.")
+    # More-negative Ctr means weaker low-frequency performance. The taper is
+    # fully removed at 1 kHz and above. Solve its amplitude against the same
+    # ISO 717 calculation used by the composite facade instead of treating Ctr
+    # as a direct per-band subtraction.
+    taper = np.clip(np.log10(1000.0 / np.maximum(target, 100.0)), 0.0, 1.0)
+
+    def candidate(amplitude):
+        curve = base + float(amplitude) * taper
+        # Iterate because the rating search has a finite lower bound; a very
+        # weak low-frequency candidate can initially land on that boundary.
+        for _ in range(4):
+            fitted_rw = airborne_rating(target, curve)[0]
+            curve = curve + (float(rw) - float(fitted_rw))
+            if fitted_rw == int(round(float(rw))):
+                break
+        numbers = airborne_single_numbers(target, curve)
+        return curve, int(numbers["ctr"])
+
+    low, high = -100.0, 100.0
+    best_curve = base.copy()
+    best_error = float("inf")
+    for _ in range(40):
+        midpoint = (low + high) / 2.0
+        curve, calculated_ctr = candidate(midpoint)
+        error = abs(calculated_ctr - requested_ctr)
+        if error < best_error:
+            best_curve, best_error = curve, error
+        if calculated_ctr < requested_ctr:
+            low = midpoint
+        elif calculated_ctr > requested_ctr:
+            high = midpoint
+        else:
+            return curve
+    return best_curve
+
+
+def facade_spectral_prediction(parts, volume, facade_area, shape_correction=0.0, lden=None):
+    """Combine facade-component transmission factors band by band.
+
+    Every part requires ``area`` and ``curve``. Optional ``freqs`` are
+    interpolated to the ISO 717-1 one-third-octave bands.
+    """
+    if not parts:
+        raise ValueError("Se requiere al menos un componente de fachada.")
+    target = THIRD_OCTAVE_100_3150.copy()
+    areas = np.asarray([max(float(part.get("area", 0.0)), 0.0) for part in parts], dtype=float)
+    if float(areas.sum()) <= 0.0:
+        raise ValueError("La superficie total de componentes debe ser mayor que cero.")
+    curves = []
+    for part in parts:
+        curve = np.asarray(part["curve"], dtype=float)
+        source_freqs = np.asarray(part.get("freqs", target), dtype=float)
+        if curve.size != source_freqs.size or curve.size < 2:
+            raise ValueError("Cada componente requiere una curva espectral válida.")
+        curves.append(np.interp(target, source_freqs, curve))
+    curves = np.vstack(curves)
+    tau = np.sum(areas[:, None] * 10.0 ** (-curves / 10.0), axis=0) / areas.sum()
+    composite = -10.0 * np.log10(np.maximum(tau, 1e-30))
+    numbers = airborne_single_numbers(target, composite)
+    rw = float(numbers["weighted"])
+    c = float(numbers["c"])
+    ctr = float(numbers["ctr"])
+    ratr = rw + ctr
+    correction = 10.0 * np.log10(0.32 * max(float(volume), 1e-9) / max(float(facade_area), 1e-9))
+    dnt_atr = ratr + float(shape_correction) + correction
+    return {
+        "freqs": target,
+        "curve": composite,
+        "rw_composite": rw,
+        "c_composite": c,
+        "ctr_composite": ctr,
+        "ratr_composite": ratr,
+        "geometry_correction": correction,
+        "dnt_a_tr": dnt_atr,
+        "indoor_from_lden": None if lden is None else float(lden) - dnt_atr,
+    }
+
+
 def a_weighted_level(freqs, levels):
     curve = np.interp(OCTAVE_EQUIPMENT, np.asarray(freqs, dtype=float), np.asarray(levels, dtype=float))
     return float(energetic_sum_db(curve + A_WEIGHTING_OCTAVE, axis=0))

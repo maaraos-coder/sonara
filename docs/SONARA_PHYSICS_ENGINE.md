@@ -28,6 +28,12 @@ canónicos:
 | Connections | 388 |
 | FloorCover | 674 |
 
+Los 674 revestimientos `FloorCover` están conectados al cálculo de impacto
+mediante sus espectros medidos de mejora `ΔL(f)` entre 20 Hz y 10 kHz. SONARA
+interpola esos datos a las bandas del cálculo, los resta al nivel de la losa
+base y obtiene `Ln,w`, `L'nT,w`, `CI` y `ΔLw`; no sustituye el espectro por un
+único valor promedio.
+
 De los 1.657 materiales y vidrios, 1.255 registros isótropos tienen densidad,
 módulo de Young, amortiguamiento, espesor y Poisson completos y entran
 directamente a los selectores de cálculo. Los modelos compuestos, ortótropos,
@@ -73,8 +79,12 @@ expresión escalar clásica.
 
 - ISO 717-1: Rw, C y Ctr.
 - ISO 12354-1: transmisión directa y flanqueos.
-- ISO 12354-2 / ISO 717-2: impacto.
-- Fachadas compuestas.
+- ISO 12354-2 / ISO 717-2: impacto, con selección de revestimiento medido o
+  modelo genérico/físico, cielo y caminos flanqueantes.
+- ISO 12354-3 / ISO 717-1: fachadas compuestas por combinación energética de
+  los factores de transmisión de cada componente y de cada banda. Los
+  componentes pueden venir de SONARA-PHYSICS o de una entrada manual Rw/Ctr;
+  se entregan Rw, C, Ctr, RA,tr, corrección geométrica y D2m,nT,Atr.
 - Ruido de instalaciones por bandas de octava.
 - Reverberación por Sabine y Eyring.
 
