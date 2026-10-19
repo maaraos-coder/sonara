@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import textwrap
 import json
 import hashlib
+import html
 import secrets
 
 from academy_access import (
@@ -495,6 +496,49 @@ div[data-baseweb="popover"] li:hover {
 div[data-baseweb="popover"] li[aria-selected="true"] {
     background: #0A63B8 !important;
     color: #FFFFFF !important;
+}
+
+/* Selectores con nombres técnicos largos */
+div[data-baseweb="popover"] [role="listbox"] {
+    width: max-content !important;
+    min-width: 340px !important;
+    max-width: min(680px, calc(100vw - 24px)) !important;
+    background: #06213D !important;
+    border: 1px solid rgba(120,190,255,.55) !important;
+    border-radius: 10px !important;
+}
+div[data-baseweb="popover"] [role="option"] {
+    min-height: 42px !important;
+    height: auto !important;
+    padding-top: 9px !important;
+    padding-bottom: 9px !important;
+    background: #06213D !important;
+    color: #FFFFFF !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    line-height: 1.35 !important;
+}
+div[data-baseweb="popover"] [role="option"] * {
+    color: #FFFFFF !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+div[data-baseweb="popover"] [role="option"]:hover,
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] {
+    background: #0A63B8 !important;
+}
+
+.selected-material-full {
+    margin: -4px 2px 8px 2px;
+    padding: 7px 10px;
+    border-left: 3px solid #32B8FF;
+    border-radius: 0 7px 7px 0;
+    background: rgba(30, 144, 255, .10);
+    color: #DCEBFF !important;
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
 }
 
 /* Botones */
@@ -2196,6 +2240,12 @@ def layer_inputs(prefix, titulo, materiales, mats, default_count=1, max_layers=5
             index=0,
             key=f"{prefix}_mat_{i}",
         )
+
+        if len(str(mat_name)) > 34:
+            st.markdown(
+                f"<div class='selected-material-full'><b>Seleccionado:</b> {html.escape(str(mat_name))}</div>",
+                unsafe_allow_html=True,
+            )
 
         esp = st.number_input(
             f"Capa {i+1} - Espesor [mm]",
