@@ -762,22 +762,106 @@ section[data-testid="stSidebar"] div[data-testid="stButton"] button {
 }
 
 
-/* --- Tabs proyecto visibles v0.17 --- */
-div[data-testid="stTabs"] button {
-    color: #EAF4FF !important;
-    font-weight: 900 !important;
+/* --- Tabs de alto contraste v0.18 ---
+   Streamlit renderiza las pestañas como div[role="tab"], no como button. */
+div[data-baseweb="tab-list"] [role="tab"] {
+    color: #DCEBFF !important;
+    background: rgba(25, 73, 112, .24) !important;
+    border: 1px solid rgba(128, 196, 255, .22) !important;
+    border-bottom: 3px solid rgba(128, 196, 255, .32) !important;
+    border-radius: 9px 9px 0 0 !important;
+    font-weight: 850 !important;
+    opacity: 1 !important;
+    transition: color .15s ease, background .15s ease, border-color .15s ease !important;
+}
+div[data-baseweb="tab-list"] [role="tab"] p {
+    color: #DCEBFF !important;
+    font-weight: 850 !important;
     opacity: 1 !important;
 }
-div[data-testid="stTabs"] button p {
-    color: #EAF4FF !important;
-    font-weight: 900 !important;
-}
-div[data-testid="stTabs"] button[aria-selected="true"] {
+div[data-baseweb="tab-list"] [role="tab"]:hover {
     color: #FFFFFF !important;
-    border-bottom: 3px solid #1E90FF !important;
+    background: rgba(30, 144, 255, .22) !important;
+    border-color: rgba(122, 190, 255, .62) !important;
 }
-div[data-testid="stTabs"] button[aria-selected="true"] p {
+div[data-baseweb="tab-list"] [role="tab"]:hover p {
     color: #FFFFFF !important;
+}
+div[data-baseweb="tab-list"] [role="tab"][aria-selected="true"] {
+    color: #FFFFFF !important;
+    background: rgba(30, 144, 255, .28) !important;
+    border-color: rgba(91, 175, 255, .72) !important;
+    border-bottom: 3px solid #32B8FF !important;
+    box-shadow: inset 0 0 0 1px rgba(80, 185, 255, .12) !important;
+}
+div[data-baseweb="tab-list"] [role="tab"][aria-selected="true"] p {
+    color: #FFFFFF !important;
+}
+div[data-baseweb="tab-list"] [role="tab"]:focus-visible {
+    outline: 3px solid rgba(89, 190, 255, .72) !important;
+    outline-offset: 2px !important;
+}
+
+/* --- Contraste global de componentes Streamlit v0.18 --- */
+main [data-testid="stMarkdownContainer"] > p,
+main [data-testid="stMarkdownContainer"] > ul,
+main [data-testid="stMarkdownContainer"] > ol,
+main [data-testid="stMarkdownContainer"] > blockquote {
+    color: #DCEBFF !important;
+}
+main [data-testid="stMarkdownContainer"] > h1,
+main [data-testid="stMarkdownContainer"] > h2,
+main [data-testid="stMarkdownContainer"] > h3,
+main [data-testid="stMarkdownContainer"] > h4,
+main [data-testid="stMarkdownContainer"] > h5,
+main [data-testid="stMarkdownContainer"] > h6 {
+    color: #FFFFFF !important;
+}
+main [data-testid="stCaptionContainer"],
+main [data-testid="stCaptionContainer"] p,
+main [data-testid="stCaptionContainer"] span {
+    color: #C8D8EA !important;
+    opacity: 1 !important;
+}
+main [data-testid="stWidgetLabel"],
+main [data-testid="stWidgetLabel"] p,
+main [data-testid="stWidgetLabel"] span,
+main .stSlider label,
+main .stSlider label p {
+    color: #F4F8FF !important;
+    opacity: 1 !important;
+    font-weight: 750 !important;
+}
+main [data-testid="stMetricLabel"],
+main [data-testid="stMetricLabel"] *,
+main [data-testid="stMetricValue"],
+main [data-testid="stMetricValue"] *,
+main [data-testid="stMetricDelta"],
+main [data-testid="stMetricDelta"] * {
+    color: #F4F8FF !important;
+    opacity: 1 !important;
+}
+main [data-testid="stMetricValue"],
+main [data-testid="stMetricValue"] * {
+    font-weight: 850 !important;
+}
+main div[data-testid="stAlert"] {
+    background: rgba(12, 64, 111, .52) !important;
+    border: 1px solid rgba(92, 181, 255, .42) !important;
+}
+main div[data-testid="stAlert"] p,
+main div[data-testid="stAlert"] span,
+main div[data-testid="stAlert"] div {
+    color: #E9F5FF !important;
+    opacity: 1 !important;
+}
+main [data-testid="stSlider"] [role="slider"] {
+    color: #FFFFFF !important;
+}
+main [data-testid="stSlider"] [data-testid="stTickBarMin"],
+main [data-testid="stSlider"] [data-testid="stTickBarMax"] {
+    color: #C8D8EA !important;
+    opacity: 1 !important;
 }
 .project-flow-card {
     background: linear-gradient(145deg, rgba(7,23,40,.98), rgba(2,10,18,.98));
