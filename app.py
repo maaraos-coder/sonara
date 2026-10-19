@@ -926,7 +926,8 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
     if exists:
         return False, "Ese correo ya está registrado."
 
-    academy_student = academy_student_by_email(email)
+    is_superuser = email in SUPERUSERS
+    academy_student = None if is_superuser else academy_student_by_email(email)
     is_academy = academy_student is not None
     end = now + timedelta(days=TRIAL_DAYS)
     pw_hash, salt = hash_password(password)
@@ -936,14 +937,14 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
         "password_hash": pw_hash,
         "salt": salt,
         "nombre": (academy_student or {}).get("display_name") or nombre or email,
-        "empresa": empresa or ("Diplomado en Acústica en la Edificación" if is_academy else ""),
-        "cargo": cargo or ("Alumno" if is_academy else ""),
+        "empresa": empresa or ("SONARA / Akusoft" if is_superuser else ("Diplomado en Acústica en la Edificación" if is_academy else "")),
+        "cargo": cargo or ("Developer" if is_superuser else ("Alumno" if is_academy else "")),
         "first_login": now.isoformat(timespec="seconds"),
         "last_login": now.isoformat(timespec="seconds"),
-        "license_type": "academy" if is_academy else "trial",
+        "license_type": "developer" if is_superuser else ("academy" if is_academy else "trial"),
         "estado": "active",
-        "trial_start": None if is_academy else now.isoformat(timespec="seconds"),
-        "trial_end": None if is_academy else end.isoformat(timespec="seconds"),
+        "trial_start": None if (is_superuser or is_academy) else now.isoformat(timespec="seconds"),
+        "trial_end": None if (is_superuser or is_academy) else end.isoformat(timespec="seconds"),
     }
 
     if academy_bridge_configured() and not create_sonara_account(account):
@@ -951,6 +952,8 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
 
     new_user = pd.DataFrame([account])
     pd.concat([users, new_user], ignore_index=True).to_csv(USERS_CSV, index=False)
+    if is_superuser:
+        return True, "Cuenta Developer creada con acceso indefinido."
     if is_academy:
         return True, "Cuenta Academy del Diplomado creada con acceso indefinido."
     return True, "Usuario creado correctamente."
@@ -962,6 +965,29 @@ def authenticate_user(email, password):
     remote_user = sonara_account_by_email(email) if academy_bridge_configured() else None
 
     if remote_user is not None:
+        # Recuperación segura del propietario: el registro reservado no contiene
+        # contraseña y se activa con la clave que el propietario escribe en SONARA.
+        # La clave nunca viaja por correo, chat ni queda guardada como texto plano.
+        if email in SUPERUSERS and (
+            not str(remote_user.get("password_hash", "")).strip()
+            or not str(remote_user.get("salt", "")).strip()
+        ):
+            pw_hash, salt = hash_password(password)
+            activated = update_sonara_account(
+                email,
+                {
+                    "password_hash": pw_hash,
+                    "salt": salt,
+                    "last_login": datetime.now().isoformat(timespec="seconds"),
+                    "license_type": "developer",
+                    "estado": "active",
+                    "trial_start": None,
+                    "trial_end": None,
+                },
+            )
+            if activated:
+                return True, "Acceso Developer activado correctamente."
+            return False, "No fue posible activar el acceso Developer. Intenta nuevamente."
         if not verify_password(password, remote_user.get("password_hash", ""), remote_user.get("salt", "")):
             return False, "Contraseña incorrecta."
         update_sonara_account(
