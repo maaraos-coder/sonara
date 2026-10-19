@@ -10,12 +10,23 @@ import json
 import hashlib
 import secrets
 
+from iso_design import (
+    OCTAVE_EQUIPMENT,
+    airborne_single_numbers,
+    dnt_from_apparent_curve,
+    facade_single_numbers,
+    impact_rating,
+    reverberation_prediction,
+    service_equipment_airborne,
+    transmission_average_db,
+)
+
 # =========================================================
 # SONARA - app.py
 # v0.9.0 con motor acústico WALLS portado desde MATLAB
 # =========================================================
 
-APP_VERSION = "BETA"
+APP_VERSION = "BETA ISO-DESIGN"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -1826,7 +1837,9 @@ def third_octave_from_fine(f_fine, tl_fine, bands=None):
         if not np.any(idx):
             tl_bands.append(float(np.interp(band, f_fine, tl_fine)))
         else:
-            tl_bands.append(float(10 * np.log10(np.mean(10 ** (tl_fine[idx] / 10)))))
+            # El aislamiento se promedia mediante el coeficiente de
+            # transmisión, no promediando directamente los dB.
+            tl_bands.append(float(transmission_average_db(tl_fine[idx])))
 
     return bands, np.asarray(tl_bands)
 
@@ -1850,41 +1863,11 @@ def iso717_rw_simple(freqs, tl, return_curve=False):
 
     tl_rw = np.interp(rw_freqs, freqs, tl)
 
-    ref_base = np.array([
-        51, 54, 57, 60, 63, 66, 69, 70,
-        71, 72, 73, 74, 74, 74, 74, 74
-    ], dtype=float)
-
-    ref = ref_base.copy()
-    ref_shifted = ref.copy()
-    rw = int(ref[7])
-
-    for _ in range(52):
-        desv = ref - tl_rw
-        suma = np.sum(desv[desv > 0])
-
-        if suma < 32:
-            rw = int(round(ref[7]))
-            ref_shifted = ref.copy()
-            break
-
-        ref = ref - 1
-
-    c_ref = np.array([
-        -29, -26, -23, -21, -19, -17, -15, -13,
-        -12, -11, -10, -9, -9, -9, -9, -9
-    ], dtype=float)
-
-    ctr_ref = np.array([
-        -20, -20, -18, -16, -15, -14, -13, -12,
-        -11, -9, -8, -9, -10, -11, -13, -15
-    ], dtype=float)
-
-    c_val = -10 * np.log10(np.sum(10 ** ((c_ref - tl_rw) / 10)))
-    ctr_val = -10 * np.log10(np.sum(10 ** ((ctr_ref - tl_rw) / 10)))
-
-    c = int(round(c_val - rw))
-    ctr = int(round(ctr_val - rw))
+    numbers = airborne_single_numbers(freqs, tl)
+    rw = int(numbers["weighted"])
+    c = int(numbers["c"])
+    ctr = int(numbers["ctr"])
+    ref_shifted = np.asarray(numbers["reference"], dtype=float)
 
     if return_curve:
         return rw, c, ctr, rw_freqs, ref_shifted, tl_rw
@@ -2147,7 +2130,7 @@ def calculate_airborne_descriptors(rw, c, ctr, stc, area_sep=10.0, vol_rec=35.0,
     Calcula/estima descriptores derivados de ruido aéreo.
     Rw/Rw+C/Rw+Ctr: desde ISO 717-1.
     STC: estimación ASTM.
-    DnT: estimación preliminar desde R + 10log(V/(T*S)) usando T0=0.5 s.
+    DnT: estimación preliminar desde R + 10log(0,16V/(T0*S)), T0=0,5 s.
     """
     rw = float(rw)
     c = float(c)
@@ -2155,9 +2138,9 @@ def calculate_airborne_descriptors(rw, c, ctr, stc, area_sep=10.0, vol_rec=35.0,
     stc = float(stc)
     area_sep = max(float(area_sep or 10.0), 0.1)
     vol_rec = max(float(vol_rec or 35.0), 0.1)
-    t_rec = max(float(t_rec or 0.5), 0.1)
+    t_rec = max(float(t_rec or 0.5), 0.1)  # se conserva como metadato
 
-    dnt_correction = 10.0 * np.log10(vol_rec / (t_rec * area_sep))
+    dnt_correction = 10.0 * np.log10(0.32 * vol_rec / area_sep)
     dntw = rw + dnt_correction
 
     return {
@@ -2699,12 +2682,12 @@ def _iso_reference_curve_from_rw(rw):
     Se desplaza para que su valor a 500 Hz sea igual al Rw ingresado.
     """
     freqs = np.array([
-        100, 125, 160, 200, 250, 315, 400, 500,
+        50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500,
         630, 800, 1000, 1250, 1600, 2000, 2500, 3150
     ])
 
     ref = np.array([
-        51, 54, 57, 60, 63, 66, 69, 70,
+        42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 70,
         71, 72, 73, 74, 74, 74, 74, 74
     ], dtype=float)
 
@@ -2773,13 +2756,13 @@ def kij_auto_value(tipo_union):
 
 def _dnt_curve_from_rap(r_ap, volumen_receptor, tiempo_reverberacion, s_sep):
     """
-    Conversión referencial a DnT por bandas.
+    Conversión de R' aparente a DnT por bandas con T0 = 0,5 s.
+
+    El tiempo de reverberación medido se cancela al convertir desde R', que ya
+    está normalizado al área de absorción equivalente. El argumento se mantiene
+    por compatibilidad con proyectos guardados anteriores.
     """
-    v = max(float(volumen_receptor), 1.0)
-    t = max(float(tiempo_reverberacion), 0.1)
-    s = max(float(s_sep), 0.01)
-    correction = 10.0 * np.log10(0.32 * v / (t * s))
-    return np.asarray(r_ap, dtype=float) + correction
+    return dnt_from_apparent_curve(r_ap, volumen_receptor, s_sep, t0=0.5)
 
 
 def app_iso12354():
@@ -3102,6 +3085,9 @@ def app_iso12354():
 
     rw_ap, c_ap, ctr_ap = iso717_rw_simple(freqs, r_ap)
     dntw, c_dnt, ctr_dnt = iso717_rw_simple(freqs, dnt)
+    dnt_numbers = airborne_single_numbers(freqs, dnt)
+    c50_dnt = dnt_numbers.get("c50_3150")
+    dnt50 = None if c50_dnt is None else dntw + c50_dnt
 
     flanking_penalty = max(0.0, float(rw_direct - rw_ap))
 
@@ -3118,7 +3104,7 @@ def app_iso12354():
     with col_results:
         st.markdown(
             f"""
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
                 <div class="result-card">
                     <div class="result-label">R'ap,w</div>
                     <div class="result-value">{rw_ap}</div>
@@ -3139,6 +3125,11 @@ def app_iso12354():
                     <div class="result-value">{kij_eq:.1f}</div>
                     <div class="result-unit">dB</div>
                 </div>
+                <div class="result-card">
+                    <div class="result-label">DnT,50 proyectado</div>
+                    <div class="result-value">{'-' if dnt50 is None else dnt50}</div>
+                    <div class="result-unit">dB</div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -3147,7 +3138,9 @@ def app_iso12354():
         st.markdown(
             f"""
             <div class='result-note'>
-            C = {c_ap} dB · Ctr = {ctr_ap} dB · DnT,w + Ctr = {dntw + ctr_dnt} dB
+            C = {c_ap} dB · Ctr = {ctr_ap} dB · DnT,A = {dntw + c_dnt} dB ·
+            DnT,50 proyectado = {'-' if dnt50 is None else str(dnt50) + ' dB'}.
+            Las bandas 50–80 Hz son una estimación del modelo y deben reemplazarse por datos espectrales de ensayo cuando estén disponibles.
             </div>
             """,
             unsafe_allow_html=True
@@ -3443,7 +3436,7 @@ def app_biblioteca():
 # =========================================================
 
 def impact_freqs():
-    return np.array([100, 125, 160, 200, 250, 315, 400, 500,
+    return np.array([50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500,
                      630, 800, 1000, 1250, 1600, 2000, 2500, 3150])
 
 
@@ -3464,7 +3457,7 @@ def impact_reference_curve_from_lnw(lnw):
     el valor ponderado sea cercano al Ln,w ingresado.
     """
     freqs = impact_freqs()
-    shape = np.array([8, 7, 6, 5, 4, 3, 2, 1,
+    shape = np.array([11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1,
                       0, -1, -2, -3, -4, -5, -6, -7], dtype=float)
     return freqs, float(lnw) + shape
 
@@ -3478,10 +3471,10 @@ def delta_floor_curve(tipo_piso, freqs, f0=None):
 
     presets = {
         "Sin revestimiento": np.zeros_like(freqs),
-        "Vinílico / piso delgado": np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5], dtype=float),
-        "Alfombra gruesa": np.array([2, 3, 4, 5, 7, 9, 12, 15, 18, 20, 22, 23, 24, 24, 24, 24], dtype=float),
-        "Piso flotante básico": np.array([0, 1, 2, 3, 5, 7, 9, 11, 13, 14, 15, 16, 17, 17, 17, 17], dtype=float),
-        "Sobrelosa flotante": np.array([1, 2, 4, 6, 9, 12, 16, 20, 23, 26, 29, 31, 33, 34, 35, 35], dtype=float),
+        "Vinílico / piso delgado": np.array([0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5], dtype=float),
+        "Alfombra gruesa": np.array([0, 1, 1, 2, 3, 4, 5, 7, 9, 12, 15, 18, 20, 22, 23, 24, 24, 24, 24], dtype=float),
+        "Piso flotante básico": np.array([0, 0, 0, 0, 1, 2, 3, 5, 7, 9, 11, 13, 14, 15, 16, 17, 17, 17, 17], dtype=float),
+        "Sobrelosa flotante": np.array([0, 0, 1, 1, 2, 4, 6, 9, 12, 16, 20, 23, 26, 29, 31, 33, 34, 35, 35], dtype=float),
     }
 
     if tipo_piso != "Piso flotante físico":
@@ -3498,27 +3491,19 @@ def ceiling_delta_curve(tipo_cielo, freqs):
     freqs = np.asarray(freqs, dtype=float)
     presets = {
         "Sin cielo": np.zeros_like(freqs),
-        "Cielo yeso-cartón simple": np.array([0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4], dtype=float),
-        "Cielo suspendido con lana": np.array([1, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 9, 10, 10, 10, 10], dtype=float),
-        "Cielo acústico desacoplado": np.array([2, 3, 4, 5, 7, 9, 11, 12, 13, 14, 15, 15, 16, 16, 16, 16], dtype=float),
+        "Cielo yeso-cartón simple": np.array([0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4], dtype=float),
+        "Cielo suspendido con lana": np.array([0, 0, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 9, 10, 10, 10, 10], dtype=float),
+        "Cielo acústico desacoplado": np.array([0, 1, 1, 2, 3, 4, 5, 7, 9, 11, 12, 13, 14, 15, 15, 16, 16, 16, 16], dtype=float),
     }
     return presets.get(tipo_cielo, np.zeros_like(freqs))
 
 
 def iso717_impact_rating(freqs, ln_curve):
     """
-    Evaluación preliminar Ln,w / CI.
-    Para Nivel 1-2 se toma el máximo ajustado de una curva de referencia simplificada.
-    CI se estima como diferencia energética de bajas frecuencias frente al valor ponderado.
+    Ajuste de curva de referencia ISO 717-2 para Ln,w / L'nT,w y CI.
     """
-    freqs = np.asarray(freqs, dtype=float)
-    ln_curve = np.asarray(ln_curve, dtype=float)
-    lnw = int(round(np.interp(500, freqs, ln_curve)))
-
-    low_mask = (freqs >= 100) & (freqs <= 2500)
-    ci_val = 10 * np.log10(np.mean(10 ** (ln_curve[low_mask] / 10))) - lnw
-    ci = int(round(ci_val))
-    return lnw, ci
+    result = impact_rating(freqs, ln_curve)
+    return int(result["weighted"]), int(result["ci"])
 
 
 def energetic_sum_levels(levels):
@@ -3846,11 +3831,14 @@ def app_impacto():
 
     lnw, ci = iso717_impact_rating(freqs, ln_total)
     lntw, ci_t = iso717_impact_rating(freqs, lnT)
+    impact_numbers_t = impact_rating(freqs, lnT)
+    ci50_t = impact_numbers_t.get("ci50_2500")
+    lnt50 = None if ci50_t is None else lntw + ci50_t
 
     with col_results:
         st.markdown(
             f"""
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
                 <div class="result-card">
                     <div class="result-label">Ln,w</div>
                     <div class="result-value">{lnw}</div>
@@ -3871,6 +3859,11 @@ def app_impacto():
                     <div class="result-value">{lntw + ci_t}</div>
                     <div class="result-unit">dB</div>
                 </div>
+                <div class="result-card">
+                    <div class="result-label">L'nT,50 proyectado</div>
+                    <div class="result-value">{'-' if lnt50 is None else lnt50}</div>
+                    <div class="result-unit">dB</div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -3883,6 +3876,7 @@ def app_impacto():
             Método: <b>{modo_impacto}</b> · {masa_txt}Ln,0,w = {ln0w:.1f} dB · 
             ΔLw piso aprox. = {np.mean(delta_piso):.1f} dB · 
             Mejora cielo aprox. = {np.mean(delta_cielo):.1f} dB. En ruido de impacto, <b>menor es mejor</b>.
+            Las bandas 50–80 Hz son proyectadas por el modelo y deben contrastarse con datos de ensayo.
             </div>
             """,
             unsafe_allow_html=True
@@ -4015,7 +4009,9 @@ def app_impacto():
             "resultado_label": f"L'nT,w {lntw} dB · CI {ci_t} · L'nT,w+CI {lntw + ci_t}",
             "lnw": float(lnw),
             "lntw": float(lntw),
+            "lnt50": None if lnt50 is None else float(lnt50),
             "ci": float(ci_t),
+            "ci50_2500": None if ci50_t is None else float(ci50_t),
             "valor": float(lntw),
             "masa": None if masa_losa is None else round(float(masa_losa), 1),
             "espesor": None,
@@ -6802,6 +6798,235 @@ def app_loscaa_validation():
 
 
 
+def _iso_design_notice():
+    st.info(
+        "SONARA calcula los descriptores acústicos de proyecto. La consulta de "
+        "ISO/TS 19488:2021, la asignación de clase y la justificación final quedan "
+        "a cargo del estudiante."
+    )
+
+
+def app_fachada_iso():
+    st.markdown("<div class='sonara-card-title'>Fachada · predicción de proyecto</div>", unsafe_allow_html=True)
+    _iso_design_notice()
+    st.caption("Modelo simplificado basado en el enfoque de EN ISO 12354-3. Resultados de diseño, no medición en obra.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        volume = st.number_input("Volumen receptor [m³]", 10.0, 2000.0, 35.0, 1.0, key="fac_volume")
+    with c2:
+        facade_area = st.number_input("Área total de fachada [m²]", 1.0, 500.0, 12.0, 0.5, key="fac_area")
+    with c3:
+        shape = st.number_input("Corrección por forma ΔLfs [dB]", -6.0, 6.0, 0.0, 0.5, key="fac_shape")
+    with c4:
+        lden = st.number_input("Nivel exterior Lden [dB]", 30.0, 100.0, 65.0, 1.0, key="fac_lden")
+
+    count = st.slider("Cantidad de componentes", 1, 6, 2, key="fac_count")
+    defaults = [
+        ("Muro opaco", max(facade_area - 3.0, 1.0), 50.0, -5.0),
+        ("Ventana", min(3.0, facade_area), 32.0, -6.0),
+        ("Puerta", 0.0, 30.0, -4.0),
+        ("Rejilla", 0.0, 20.0, -2.0),
+    ]
+    components = []
+    st.markdown("##### Componentes de la fachada")
+    for idx in range(count):
+        default = defaults[idx] if idx < len(defaults) else (f"Componente {idx + 1}", 0.0, 35.0, -5.0)
+        cols = st.columns([1.6, 1, 1, 1])
+        with cols[0]:
+            name = st.text_input("Componente", default[0], key=f"fac_name_{idx}")
+        with cols[1]:
+            area = st.number_input("Área [m²]", 0.0, 500.0, float(default[1]), 0.25, key=f"fac_comp_area_{idx}")
+        with cols[2]:
+            rw = st.number_input("Rw [dB]", 5.0, 90.0, float(default[2]), 1.0, key=f"fac_rw_{idx}")
+        with cols[3]:
+            ctr = st.number_input("Ctr [dB]", -20.0, 5.0, float(default[3]), 1.0, key=f"fac_ctr_{idx}")
+        components.append({"name": name, "area": area, "rw": rw, "ctr": ctr})
+
+    used_area = sum(item["area"] for item in components)
+    if abs(used_area - facade_area) > 0.05:
+        st.warning(f"La suma de componentes es {used_area:.2f} m² y no coincide con el área total ({facade_area:.2f} m²). El cálculo usa la suma declarada.")
+
+    try:
+        result = facade_single_numbers(components, volume, facade_area, shape, lden)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+
+    cards = st.columns(5)
+    values = [
+        ("Rw compuesto", result["rw_composite"], "dB"),
+        ("RA,tr compuesto", result["ratr_composite"], "dB"),
+        ("Corrección geométrica", result["geometry_correction"], "dB"),
+        ("D2m,nT,Atr", result["dnt_a_tr"], "dB"),
+        ("Nivel interior estimado", result["indoor_from_lden"], "dB"),
+    ]
+    for col, (label, value, unit) in zip(cards, values):
+        with col:
+            st.metric(label, f"{value:.1f} {unit}")
+
+    df = pd.DataFrame(components)
+    df.columns = ["Componente", "Área [m²]", "Rw [dB]", "Ctr [dB]"]
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.download_button("⬇ Descargar cálculo de fachada", df.to_csv(index=False).encode("utf-8"), "sonara_fachada.csv", "text/csv", key="fac_download")
+    solution_save_widget({
+        "nombre": f"Fachada D2m,nT,Atr {result['dnt_a_tr']:.1f} dB",
+        "tipo_calculo": "Fachada ISO 12354-3",
+        "resultado_label": f"D2m,nT,Atr {result['dnt_a_tr']:.1f} dB",
+        "valor": float(result["dnt_a_tr"]),
+        "d2mnt_atr": float(result["dnt_a_tr"]),
+        "rw_compuesto": float(result["rw_composite"]),
+        "ratr_compuesto": float(result["ratr_composite"]),
+        "componentes": components,
+        "descripcion": "Predicción simplificada de fachada; clasificación ISO/TS 19488 pendiente del estudiante.",
+    }, key_prefix="save_facade")
+
+
+def app_instalaciones_iso():
+    st.markdown("<div class='sonara-card-title'>Ruido de instalaciones · predicción de proyecto</div>", unsafe_allow_html=True)
+    _iso_design_notice()
+    st.caption("Método educativo por bandas de octava inspirado en EN 12354-5. Use datos de potencia sonora del fabricante.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        event_type = st.selectbox("Tipo de funcionamiento", ["Continuo (LAeq)", "Intermitente (LAFmax estimado)"], key="svc_type")
+    with c2:
+        adjacent = st.selectbox("Ubicación de la fuente", ["Mismo recinto", "Recinto adyacente"], key="svc_location") == "Recinto adyacente"
+    with c3:
+        distance = st.number_input("Distancia fuente-receptor [m]", 0.2, 50.0, 2.0, 0.1, key="svc_distance")
+    with c4:
+        directivity = st.number_input("Factor de directividad Q", 0.5, 8.0, 2.0, 0.5, key="svc_q")
+
+    c5, c6, c7 = st.columns(3)
+    with c5:
+        source_abs = st.number_input("Absorción equivalente fuente [m²]", 1.0, 1000.0, 20.0, 1.0, key="svc_as")
+    with c6:
+        receiver_abs = st.number_input("Absorción equivalente receptor [m²]", 1.0, 1000.0, 20.0, 1.0, key="svc_ar")
+    with c7:
+        receiver_t = st.number_input("TR receptor [s]", 0.1, 10.0, 0.6, 0.1, key="svc_tr")
+
+    st.markdown("##### Datos espectrales")
+    lw_defaults = [70, 68, 66, 64, 61, 58, 55]
+    r_defaults = [28, 34, 40, 46, 51, 55, 58]
+    lw_values, r_values, extra_values = [], [], []
+    headers = st.columns([1, 1, 1, 1])
+    for col, label in zip(headers, ["Banda", "Lw [dB]", "R separador [dB]", "Atenuación adicional [dB]"]):
+        col.markdown(f"**{label}**")
+    for idx, freq in enumerate(OCTAVE_EQUIPMENT):
+        cols = st.columns([1, 1, 1, 1])
+        cols[0].markdown(f"{freq} Hz")
+        lw_values.append(cols[1].number_input("Lw", 0.0, 140.0, float(lw_defaults[idx]), 1.0, key=f"svc_lw_{freq}", label_visibility="collapsed"))
+        r_values.append(cols[2].number_input("R", 0.0, 100.0, float(r_defaults[idx]), 1.0, key=f"svc_r_{freq}", label_visibility="collapsed", disabled=not adjacent))
+        extra_values.append(cols[3].number_input("Atenuación", 0.0, 80.0, 0.0, 1.0, key=f"svc_extra_{freq}", label_visibility="collapsed"))
+    separator_area = st.number_input("Área del separador [m²]", 1.0, 500.0, 10.0, 0.5, key="svc_sep_area", disabled=not adjacent)
+
+    result = service_equipment_airborne(
+        lw_values, distance, directivity, source_abs, receiver_abs,
+        reduction_bands=r_values if adjacent else None,
+        separating_area=separator_area if adjacent else None,
+        receiver_t=receiver_t,
+        extra_attenuation=extra_values,
+    )
+    descriptor = "LAFmax,nT proyectado" if event_type.startswith("Intermitente") else "LAeq,nT proyectado"
+    st.metric(descriptor, f"{result['la_normalized']:.1f} dB(A)")
+    if event_type.startswith("Intermitente"):
+        st.caption("El valor representa un máximo solo si los Lw ingresados corresponden al máximo del evento y su constante temporal es compatible con LAFmax.")
+
+    df = pd.DataFrame({
+        "Frecuencia [Hz]": OCTAVE_EQUIPMENT,
+        "Lw [dB]": lw_values,
+        "Lp receptor [dB]": np.round(result["lp"], 1),
+        "Lp,nT [dB]": np.round(result["lp_normalized"], 1),
+    })
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=OCTAVE_EQUIPMENT, y=result["lp_normalized"], mode="lines+markers", name="Lp,nT", line=dict(color="#4F7CFF", width=3)))
+    fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=OCTAVE_EQUIPMENT)
+    fig.update_yaxes(title="Nivel [dB]")
+    fig.update_layout(template="plotly_dark", height=370, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.download_button("⬇ Descargar cálculo de instalaciones", df.to_csv(index=False).encode("utf-8"), "sonara_instalaciones.csv", "text/csv", key="svc_download")
+    solution_save_widget({
+        "nombre": f"Instalaciones {descriptor} {result['la_normalized']:.1f} dB(A)",
+        "tipo_calculo": "Ruido de instalaciones EN 12354-5",
+        "resultado_label": f"{descriptor} {result['la_normalized']:.1f} dB(A)",
+        "valor": float(result["la_normalized"]),
+        "la_normalized": float(result["la_normalized"]),
+        "frecuencias": list(map(float, OCTAVE_EQUIPMENT)),
+        "curva": list(map(float, result["lp_normalized"])),
+        "descripcion": "Predicción por bandas; clasificación ISO/TS 19488 pendiente del estudiante.",
+    }, key_prefix="save_services")
+
+
+def app_reverberacion_iso():
+    st.markdown("<div class='sonara-card-title'>Reverberación · predicción de proyecto</div>", unsafe_allow_html=True)
+    _iso_design_notice()
+    st.caption("Predicción por bandas de octava mediante Sabine o Eyring; la verificación en obra puede realizarse según ISO 3382-2.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        volume = st.number_input("Volumen del recinto [m³]", 5.0, 10000.0, 90.0, 1.0, key="rev_volume")
+    with c2:
+        floor_area = st.number_input("Superficie de piso [m²]", 2.0, 5000.0, 30.0, 1.0, key="rev_floor")
+    with c3:
+        method_label = st.selectbox("Método", ["Sabine", "Eyring"], key="rev_method")
+    with c4:
+        count = st.slider("Superficies", 1, 8, 4, key="rev_count")
+
+    presets = {
+        "Hormigón / superficie dura": [0.01, 0.01, 0.02, 0.02, 0.02, 0.03],
+        "Yeso pintado": [0.10, 0.05, 0.04, 0.07, 0.09, 0.10],
+        "Vidrio": [0.18, 0.06, 0.04, 0.03, 0.02, 0.02],
+        "Alfombra": [0.08, 0.24, 0.57, 0.69, 0.71, 0.73],
+        "Cielo acústico": [0.45, 0.70, 0.85, 0.90, 0.90, 0.85],
+        "Panel de lana mineral": [0.35, 0.80, 0.95, 1.00, 1.00, 1.00],
+    }
+    defaults = [
+        ("Piso", floor_area, "Hormigón / superficie dura"),
+        ("Cielo", floor_area, "Yeso pintado"),
+        ("Muros", max(2.0 * volume / max(floor_area ** 0.5, 1.0), 1.0), "Yeso pintado"),
+        ("Ventanas", 6.0, "Vidrio"),
+    ]
+    surfaces = []
+    for idx in range(count):
+        default = defaults[idx] if idx < len(defaults) else (f"Superficie {idx + 1}", 10.0, "Hormigón / superficie dura")
+        cols = st.columns([1.3, 1, 1.5])
+        name = cols[0].text_input("Superficie", default[0], key=f"rev_name_{idx}")
+        area = cols[1].number_input("Área [m²]", 0.1, 10000.0, float(default[1]), 0.5, key=f"rev_area_{idx}")
+        preset = cols[2].selectbox("Material", list(presets), index=list(presets).index(default[2]), key=f"rev_preset_{idx}")
+        surfaces.append({"name": name, "area": area, "alpha": presets[preset]})
+
+    result = reverberation_prediction(volume, floor_area, surfaces, method=method_label.lower())
+    c1, c2 = st.columns(2)
+    c1.metric("T promedio 250–2000 Hz", f"{result['t_250_2000']:.2f} s")
+    c2.metric("A/S piso promedio", f"{result['a_over_sfloor_250_2000']:.2f}")
+
+    rev_freqs = [125, 250, 500, 1000, 2000, 4000]
+    df = pd.DataFrame({
+        "Frecuencia [Hz]": rev_freqs,
+        "Absorción equivalente A [m²]": np.round(result["absorption"], 2),
+        "T [s]": np.round(result["reverberation_time"], 2),
+    })
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    fig = go.Figure(go.Scatter(x=rev_freqs, y=result["reverberation_time"], mode="lines+markers", line=dict(color="#46D6B3", width=3), name="T"))
+    fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=rev_freqs)
+    fig.update_yaxes(title="Tiempo de reverberación [s]", rangemode="tozero")
+    fig.update_layout(template="plotly_dark", height=370, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.download_button("⬇ Descargar cálculo de reverberación", df.to_csv(index=False).encode("utf-8"), "sonara_reverberacion.csv", "text/csv", key="rev_download")
+    solution_save_widget({
+        "nombre": f"Reverberación T {result['t_250_2000']:.2f} s",
+        "tipo_calculo": "Reverberación EN 12354-6",
+        "resultado_label": f"T 250–2000 Hz {result['t_250_2000']:.2f} s",
+        "valor": float(result["t_250_2000"]),
+        "t_mid": float(result["t_250_2000"]),
+        "a_over_floor_mid": float(result["a_over_sfloor_250_2000"]),
+        "frecuencias": rev_freqs,
+        "curva": list(map(float, result["reverberation_time"])),
+        "descripcion": f"Predicción {method_label}; clasificación ISO/TS 19488 pendiente del estudiante.",
+    }, key_prefix="save_reverberation")
+
+
 def app_calculadora_master():
     st.markdown(
         "<h1 style='color:#FFFFFF;margin-bottom:8px;'>Calculadora</h1>",
@@ -6813,7 +7038,10 @@ def app_calculadora_master():
         [
             "Ruido aéreo",
             "Ruido de impacto",
-            "Transmisión entre recintos (ISO 12354-1)"
+            "Transmisión entre recintos (ISO 12354-1)",
+            "Fachada (ISO 12354-3)",
+            "Ruido de instalaciones (EN 12354-5)",
+            "Reverberación (EN 12354-6)"
         ],
         horizontal=True,
         key="calc_master_submodule"
@@ -6827,6 +7055,12 @@ def app_calculadora_master():
         app_impacto()
     elif sub == "Transmisión entre recintos (ISO 12354-1)":
         app_iso12354()
+    elif sub == "Fachada (ISO 12354-3)":
+        app_fachada_iso()
+    elif sub == "Ruido de instalaciones (EN 12354-5)":
+        app_instalaciones_iso()
+    elif sub == "Reverberación (EN 12354-6)":
+        app_reverberacion_iso()
 
 
 
@@ -7857,7 +8091,8 @@ def app_project_calculator_embedded(project, requirement):
     indicador = objetivo.get("indicador", "Rw")
     tipo_elemento_req = objetivo.get("tipo_elemento", "Paramento vertical")
 
-    # Selector de calculadora según requerimiento
+    # Selector de calculadora según requerimiento. Las clases ISO/TS 19488 no
+    # se calculan aquí: el estudiante interpreta los descriptores obtenidos.
     if tipo_elemento_req in ["Paramento horizontal", "Entrepiso", "Impacto"]:
         calc_mode_default = "Ruido de impacto"
     elif indicador in ["L'nT,w", "Ln,w", "L'nT,w+CI"]:
@@ -7865,10 +8100,21 @@ def app_project_calculator_embedded(project, requirement):
     else:
         calc_mode_default = "Ruido aéreo"
 
+    calc_options = [
+        "Solución compuesta", "Ruido aéreo", "Ruido de impacto", "ISO 12354-1",
+        "Fachada ISO 12354-3", "Instalaciones EN 12354-5", "Reverberación EN 12354-6",
+    ]
+    default_index = 2 if calc_mode_default == "Ruido de impacto" else 0
+    if tipo_elemento_req == "Fachada":
+        default_index = 4
+    elif indicador in ["LAeq,nT", "LAFmax,nT", "NC", "NR"]:
+        default_index = 5
+    elif indicador in ["T", "TR", "A/S"]:
+        default_index = 6
     calc_mode = st.radio(
         "Calculadora del requerimiento",
-        ["Solución compuesta", "Ruido aéreo", "Ruido de impacto", "ISO 12354-1"],
-        index=0 if tipo_elemento_req in ["Fachada", "Puerta", "Ventana", "Paramento vertical"] else 2,
+        calc_options,
+        index=default_index,
         horizontal=True,
         key="project_embedded_calc_mode"
     )
@@ -7889,8 +8135,14 @@ def app_project_calculator_embedded(project, requirement):
         app_calculator()
     elif calc_mode == "Ruido de impacto":
         app_impacto()
-    else:
+    elif calc_mode == "ISO 12354-1":
         app_iso12354()
+    elif calc_mode == "Fachada ISO 12354-3":
+        app_fachada_iso()
+    elif calc_mode == "Instalaciones EN 12354-5":
+        app_instalaciones_iso()
+    else:
+        app_reverberacion_iso()
 
 
 def app_proyectos():
@@ -8410,12 +8662,12 @@ def app_ayuda():
             {"Concepto": "DnT,w", "Uso": "Aislamiento medido/predicho entre recintos", "Interpretación": "Mayor es mejor"},
             {"Concepto": "D2m,nT,Atr", "Uso": "Aislamiento de fachada frente a ruido exterior", "Interpretación": "Mayor es mejor"},
             {"Concepto": "L'nT,w", "Uso": "Ruido de impacto normalizado en obra", "Interpretación": "Menor es mejor"},
-            {"Concepto": "NC / NR", "Uso": "Ruido de instalaciones HVAC", "Interpretación": "Menor es mejor"},
+            {"Concepto": "LAeq,nT / LAFmax,nT", "Uso": "Ruido de instalaciones continuas o intermitentes", "Interpretación": "Menor es mejor"},
             {"Concepto": "T / TR", "Uso": "Tiempo de reverberación", "Interpretación": "Depende del uso del recinto"},
         ])
         st.dataframe(conceptos, use_container_width=True, hide_index=True)
         st.markdown(
-            "<div class='result-note'>Regla práctica: Rw 35 bajo · Rw 45 bueno · Rw 55 muy bueno · Rw 65 alto desempeño.</div>",
+            "<div class='result-note'><b>Trabajo ISO/TS 19488:</b> SONARA entrega los valores proyectados. El estudiante debe consultar la tabla aplicable, asignar la clase y justificarla sin ayuda automática del programa.</div>",
             unsafe_allow_html=True
         )
 
@@ -8440,7 +8692,10 @@ def app_ayuda():
         refs = pd.DataFrame([
             {"Área": "Vivienda Chile", "Referencia": "OGUC art. 4.1.6 / NCh352/2"},
             {"Área": "Aislamiento aéreo", "Referencia": "ISO 717-1, ISO 10140-2, ISO 16283-1"},
+            {"Área": "Clasificación de viviendas", "Referencia": "ISO/TS 19488:2021 (consulta y clasificación manual por el estudiante)"},
             {"Área": "Predicción edificios", "Referencia": "ISO 12354-1, ISO 12354-2, ISO 12354-3"},
+            {"Área": "Instalaciones", "Referencia": "EN 12354-5:2023"},
+            {"Área": "Absorción y reverberación", "Referencia": "EN 12354-6; verificación según ISO 3382-2"},
             {"Área": "Hospitales", "Referencia": "HTM 08-01"},
             {"Área": "Educación", "Referencia": "BB93, ANSI/ASA S12.60"},
             {"Área": "HVAC", "Referencia": "ASHRAE Sound and Vibration, CIBSE Guide B5"},

@@ -2,6 +2,8 @@
 
 ## Estructura
 - `app.py`: aplicación principal.
+- `iso_design.py`: motor verificable de descriptores acústicos de proyecto.
+- `tests/test_iso_design.py`: pruebas unitarias del motor acústico.
 - `requirements.txt`: dependencias Python.
 - `Dockerfile`: contenedor para despliegue comercial.
 - `render.yaml`: blueprint para Render.
@@ -12,6 +14,19 @@
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+## Alcance acústico docente
+
+La calculadora entrega valores proyectados de aislamiento aéreo, impacto,
+fachada, ruido de instalaciones y reverberación. No asigna automáticamente
+clases ISO/TS 19488:2021; la consulta de las tablas, clasificación y
+justificación corresponden al estudiante.
+
+Ejecutar las pruebas del motor con:
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ## Probar con Docker
