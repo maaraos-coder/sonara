@@ -16,7 +16,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 CATALOG_DB = ROOT / "data" / "acoustic_catalog.sqlite"
 CATALOG_PART_PATTERN = "acoustic_catalog.sqlite.xz.part-*"
-CATALOG_SHA256 = "c4c29e0c7104e002e33ef09f6d4ed14e7cf94c7f90dc30cb9961a15dc57cb9a9"
+CATALOG_SHA256 = "6458c8e46c0bafc793bb22a4f0f999fb8e96d213115cf7dbcf3a0b1951c4a8bb"
 DERIVED_MATERIALS_CSV = ROOT / "data" / "acoustic_materials.csv"
 
 

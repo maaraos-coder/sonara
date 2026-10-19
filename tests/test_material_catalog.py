@@ -1,4 +1,5 @@
 import unittest
+import re
 
 import numpy as np
 
@@ -18,18 +19,24 @@ class MaterialCatalogTests(unittest.TestCase):
         self.assertTrue(catalog_available())
         self.assertTrue(catalog_database_path().exists())
         summary = dict(zip(catalog_summary()["dataset"], catalog_summary()["records"]))
-        self.assertEqual(summary["Materials"], 1576)
+        self.assertEqual(summary["Materials"], 1547)
         self.assertEqual(summary["Glazing"], 81)
-        self.assertEqual(sum(summary.values()), 3646)
+        self.assertEqual(sum(summary.values()), 3515)
 
     def test_only_complete_isotropic_records_enter_plate_calculation(self):
         materials = calculation_materials()
-        self.assertEqual(len(materials), 1255)
+        self.assertEqual(len(materials), 1229)
         for material in list(materials.values())[:25]:
             self.assertEqual(material["model_type"], "Isotropic")
             self.assertGreater(material["dens"], 0.0)
             self.assertGreater(material["E"], 0.0)
             self.assertGreater(material["espesor"], 0.0)
+
+    def test_catalogue_has_no_cjk_identity_labels(self):
+        cjk = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+        frame = browse_catalog(limit=5000)
+        labels = frame["name"].fillna("") + " " + frame["manufacturer"].fillna("")
+        self.assertFalse(labels.str.contains(cjk).any())
 
     def test_chile_filter_returns_enabled_records(self):
         frame = browse_catalog(chile_only=True, limit=5000)
