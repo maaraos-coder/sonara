@@ -22,13 +22,8 @@ from iso_design import (
     THIRD_OCTAVE_100_3150,
     airborne_single_numbers,
     compare_predicted_measured,
-    dnt_from_apparent_curve,
-    facade_single_numbers,
-    facade_spectral_prediction,
     impact_rating,
     manual_airborne_curve,
-    reverberation_prediction,
-    service_equipment_airborne,
     transmission_average_db,
 )
 from material_catalog import (
@@ -47,13 +42,27 @@ from sonara_engine import (
     plate_properties as engine_plate_properties,
     single_leaf_tl as engine_single_leaf_tl,
 )
+from iso12354_engine import (
+    OCTAVE as ISO12354_OCTAVE,
+    RAIN_PRESETS,
+    airborne_detailed,
+    double_roof_rain_spectrum,
+    facade_detailed,
+    impact_detailed,
+    junction_kij,
+    outdoor_sound_power_detailed,
+    rainfall_indoor_level,
+    rainfall_material_spectrum,
+    room_absorption_detailed,
+    service_equipment_detailed,
+)
 
 # =========================================================
 # SONARA - app.py
 # Motor físico principal SONARA-PHYSICS
 # =========================================================
 
-APP_VERSION = "BETA 0.11 · SONARA-PHYSICS"
+APP_VERSION = "BETA 0.12 · SONARA ISO 12354 + RAIN"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -2816,76 +2825,6 @@ def _iso_reference_curve_from_rw(rw):
     return freqs, curve
 
 
-def _iso12354_apparent_curve(freqs, r_direct, s_sep, flanks):
-    """
-    Estimación ISO 12354 simplificada por bandas.
-
-    Mejora v0.9.9:
-    - Si un flanco trae r_curve, se usa su curva R(f) calculada por SONARA-PHYSICS.
-    - Si no trae r_curve, se genera una curva de referencia desde Rw.
-    - Kij se aplica por bandas como corrección energética simplificada.
-    """
-
-    freqs = np.asarray(freqs, dtype=float)
-    r_direct = np.asarray(r_direct, dtype=float)
-
-    s_sep = max(float(s_sep), 0.01)
-    tau_total = 10 ** (-r_direct / 10.0)
-
-    for flanco in flanks:
-        if not flanco.get("activo", False):
-            continue
-
-        area_f = max(float(flanco.get("area", s_sep)), 0.01)
-        kij = float(flanco.get("kij", 0.0))
-
-        if flanco.get("r_curve") is not None:
-            r_flanco = np.asarray(flanco["r_curve"], dtype=float)
-            if len(r_flanco) != len(freqs):
-                r_flanco = np.interp(freqs, np.asarray(flanco.get("freqs", freqs), dtype=float), r_flanco)
-        else:
-            rw_f = float(flanco.get("rw", 45.0))
-            _, r_flanco = _iso_reference_curve_from_rw(rw_f)
-
-        r_ij = r_flanco + kij
-        tau_total += (area_f / s_sep) * 10 ** (-r_ij / 10.0)
-
-    tau_total = np.maximum(tau_total, 1e-12)
-    return -10.0 * np.log10(tau_total)
-
-
-def kij_auto_value(tipo_union):
-    """
-    Kij referencial simplificado para uso preliminar.
-
-    Valores orientativos:
-    mientras mayor Kij, menor transmisión por la unión.
-    En versión futura se puede reemplazar por tablas completas ISO 12354.
-    """
-    tabla = {
-        "Manual": None,
-        "Unión rígida pesada": 8.0,
-        "Unión rígida liviana": 5.0,
-        "Unión semi-rígida": 12.0,
-        "Montante simple": 6.0,
-        "Montantes independientes": 15.0,
-        "Doble estructura": 20.0,
-        "Junta elástica / resiliente": 25.0,
-    }
-    return tabla.get(tipo_union, None)
-
-
-def _dnt_curve_from_rap(r_ap, volumen_receptor, tiempo_reverberacion, s_sep):
-    """
-    Conversión de R' aparente a DnT por bandas con T0 = 0,5 s.
-
-    El tiempo de reverberación medido se cancela al convertir desde R', que ya
-    está normalizado al área de absorción equivalente. El argumento se mantiene
-    por compatibilidad con proyectos guardados anteriores.
-    """
-    return dnt_from_apparent_curve(r_ap, volumen_receptor, s_sep, t0=0.5)
-
-
 def app_iso12354():
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>ISO 12354 — Predicción entre recintos</h2>",
@@ -3049,10 +2988,10 @@ def app_iso12354():
         flanks = []
 
         flancos_base = [
-            {"nombre": "Muro lateral 1", "rw": 45.0, "area": 10.0, "kij": 5.0, "activo": True, "key": "muro1"},
-            {"nombre": "Muro lateral 2", "rw": 45.0, "area": 10.0, "kij": 5.0, "activo": True, "key": "muro2"},
-            {"nombre": "Fachada / elemento lateral", "rw": 45.0, "area": 10.0, "kij": 5.0, "activo": False, "key": "fachada"},
-            {"nombre": "Losa horizontal", "rw": 55.0, "area": 15.0, "kij": 8.0, "activo": False, "key": "losa"},
+            {"nombre": "Muro lateral 1", "rw": 45.0, "kij": 5.0, "activo": True, "key": "muro1"},
+            {"nombre": "Muro lateral 2", "rw": 45.0, "kij": 5.0, "activo": True, "key": "muro2"},
+            {"nombre": "Fachada / elemento lateral", "rw": 45.0, "kij": 5.0, "activo": False, "key": "fachada"},
+            {"nombre": "Losa horizontal", "rw": 55.0, "kij": 8.0, "activo": False, "key": "losa"},
         ]
 
         if incluir_flanqueos:
@@ -3075,16 +3014,23 @@ def app_iso12354():
                     freqs_f = None
 
                     if modo_r == "Manual":
-                        rw_f = st.number_input(
-                            "R flanco [dB]",
+                        rcols = st.columns(2)
+                        rw_f = rcols[0].number_input(
+                            "R elemento lado emisor [dB]",
                             value=fl["rw"],
                             min_value=10.0,
                             max_value=90.0,
                             step=1.0,
                             key=f"iso12354_rw_f_{i}"
                         )
+                        rw_receiver_f = rcols[1].number_input(
+                            "R elemento lado receptor [dB]",
+                            value=fl["rw"], min_value=10.0, max_value=90.0, step=1.0,
+                            key=f"iso12354_rw_receiver_f_{i}",
+                        )
                         masa_f = None
                         fc_f = None
+                        receiver_freqs_f, receiver_curve_f = _iso_reference_curve_from_rw(rw_receiver_f)
                     else:
                         capas_flanco = layer_inputs(
                             f"iso_flanco_{i}",
@@ -3096,6 +3042,8 @@ def app_iso12354():
                         )
 
                         rw_f, masa_f, fc_f, freqs_f, r_curve_f = calc_rw_from_layers(capas_flanco)
+                        rw_receiver_f = rw_f
+                        receiver_freqs_f, receiver_curve_f = freqs_f, r_curve_f
 
                         st.markdown(
                             f"""
@@ -3109,12 +3057,20 @@ def app_iso12354():
                             unsafe_allow_html=True
                         )
 
-                    area_f = st.number_input(
-                        "Superficie equivalente del flanco S_eq [m²]",
-                        value=fl["area"],
-                        min_value=0.1,
-                        step=0.5,
-                        key=f"iso12354_area_f_{i}"
+                    geo_cols = st.columns(3)
+                    union_length = geo_cols[0].number_input(
+                        "Longitud unión lᵢⱼ [m]", 0.1, 50.0, 3.0, 0.1,
+                        key=f"iso12354_length_{i}",
+                    )
+                    mass_source = geo_cols[1].number_input(
+                        "m' emisor [kg/m²]", 1.0, 2000.0,
+                        float(masa_f if masa_f else 100.0), 1.0,
+                        key=f"iso12354_mass_source_{i}",
+                    )
+                    mass_receiver = geo_cols[2].number_input(
+                        "m' receptor [kg/m²]", 1.0, 2000.0,
+                        float(masa_f if masa_f else 100.0), 1.0,
+                        key=f"iso12354_mass_receiver_{i}",
                     )
 
                     tipo_union = st.selectbox(
@@ -3133,7 +3089,9 @@ def app_iso12354():
                         key=f"iso12354_tipo_union_{i}"
                     )
 
-                    kij_sugerido = kij_auto_value(tipo_union)
+                    kij_sugerido = None if tipo_union == "Manual" else junction_kij(
+                        tipo_union, mass_source, mass_receiver
+                    )
 
                     if kij_sugerido is None:
                         kij = st.number_input(
@@ -3158,20 +3116,27 @@ def app_iso12354():
                     flanks.append({
                         "activo": activo,
                         "rw": float(rw_f),
-                        "area": float(area_f),
                         "kij": float(kij),
                         "nombre": fl["nombre"],
                         "modo": modo_r,
                         "r_curve": r_curve_f,
-                        "freqs": freqs_f
+                        "freqs": freqs_f,
+                        "receiver_curve": receiver_curve_f,
+                        "receiver_freqs": receiver_freqs_f,
+                        "length": float(union_length),
+                        "mass_source": float(mass_source),
+                        "mass_receiver": float(mass_receiver),
+                        "junction_type": tipo_union,
                     })
 
-        with st.expander("¿Qué es R, S_eq y K_ij?"):
+        with st.expander("¿Qué son R, lᵢⱼ y Kᵢⱼ?"):
             st.markdown(
                 """
-                **R flanco:** aislamiento acústico propio del elemento lateral o flanqueante.  
-                **S_eq:** superficie equivalente asociada al camino de transmisión flanqueante.  
-                **K_ij:** corrección de unión. Mientras mayor sea, menor transmisión por esa unión.
+                **R:** aislamiento acústico de los elementos laterales en los lados emisor y receptor.
+
+                **lᵢⱼ:** longitud común de la unión estructural.
+
+                **Kᵢⱼ:** índice de reducción vibratoria de la unión. Mientras mayor sea, menor transmisión.
                 """
             )
 
@@ -3197,12 +3162,38 @@ def app_iso12354():
 
     freqs, r_direct = _iso_reference_curve_from_rw(rw_direct)
 
-    if incluir_flanqueos:
-        r_ap = _iso12354_apparent_curve(freqs, r_direct, s_sep, flanks)
-    else:
-        r_ap = np.asarray(r_direct, dtype=float)
-
-    dnt = _dnt_curve_from_rap(r_ap, volumen_receptor, t_receptor, s_sep)
+    detailed_junctions = []
+    for flank in flanks if incluir_flanqueos else []:
+        if not flank.get("activo", False):
+            continue
+        flank_freqs = flank.get("freqs")
+        flank_curve = flank.get("r_curve")
+        if flank_curve is None:
+            flank_freqs, flank_curve = _iso_reference_curve_from_rw(flank["rw"])
+        receiver_curve = flank.get("receiver_curve")
+        receiver_freqs = flank.get("receiver_freqs")
+        if receiver_curve is None:
+            receiver_freqs, receiver_curve = flank_freqs, flank_curve
+        detailed_junctions.append({
+            "active": True,
+            "name": flank["nombre"],
+            "source_curve": flank_curve,
+            "receiver_curve": receiver_curve,
+            "source_frequencies": flank_freqs,
+            "receiver_frequencies": receiver_freqs,
+            "junction_type": flank.get("junction_type", "T"),
+            "kij": flank["kij"],
+            "mass_source": flank.get("mass_source", 100.0),
+            "mass_receiver": flank.get("mass_receiver", 100.0),
+            "length": flank.get("length", 3.0),
+        })
+    airborne_result = airborne_detailed(
+        r_direct, freqs, s_sep, volumen_receptor,
+        junctions=detailed_junctions, t0=0.5,
+    )
+    freqs = airborne_result["frequencies"]
+    r_ap = airborne_result["apparent_curve"]
+    dnt = airborne_result["dnt_curve"]
 
     rw_ap, c_ap, ctr_ap = iso717_rw_simple(freqs, r_ap)
     dntw, c_dnt, ctr_dnt = iso717_rw_simple(freqs, dnt)
@@ -3290,6 +3281,13 @@ def app_iso12354():
             line=dict(color="#4F7CFF", width=3),
             marker=dict(size=6)
         ))
+
+        for path in airborne_result["paths"][1:]:
+            fig.add_trace(go.Scatter(
+                x=freqs, y=np.round(path["curve"], 1), mode="lines",
+                name=path["name"], line=dict(width=1.2, dash="dot"),
+                opacity=0.7,
+            ))
 
         fig.add_trace(go.Scatter(
             x=freqs,
@@ -3702,43 +3700,6 @@ def impact_transmission_scheme_html(flanks_active):
     """)
 
 
-def impact_kij_auto_value(tipo_union):
-    tabla = {
-        "Manual": None,
-        "Unión rígida pesada": 5.0,
-        "Unión rígida liviana": 3.0,
-        "Unión semi-rígida": 8.0,
-        "Montante simple": 5.0,
-        "Montantes independientes": 12.0,
-        "Doble estructura": 16.0,
-        "Junta elástica / resiliente": 20.0,
-    }
-    return tabla.get(tipo_union, None)
-
-
-def impact_flank_curve_from_lnw(freqs, lnw, kij=0.0):
-    """
-    Nivel de flanco por impacto referencial.
-    Kij reduce el nivel transmitido por la unión.
-    """
-    _, curve = impact_reference_curve_from_lnw(lnw)
-    return np.asarray(curve, dtype=float) - float(kij)
-
-
-def impact_iso12354_2_sum(ln_direct, flanks):
-    """
-    Suma energética de camino directo + caminos flanqueantes de impacto.
-    """
-    levels = [np.asarray(ln_direct, dtype=float)]
-
-    for f in flanks:
-        if not f.get("activo", False):
-            continue
-        levels.append(np.asarray(f["curve"], dtype=float))
-
-    return energetic_sum_levels(levels)
-
-
 def app_impacto():
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>Impacto — Ruido de impacto entre recintos</h2>",
@@ -3860,6 +3821,7 @@ def app_impacto():
 
         volumen_receptor = st.number_input("Volumen recinto receptor V [m³]", value=35.0, min_value=1.0, step=1.0)
         t_receptor = st.number_input("Tiempo reverberación receptor T [s]", value=0.5, min_value=0.1, step=0.1)
+        area_entrepiso = st.number_input("Área del entrepiso separador [m²]", value=12.0, min_value=0.5, step=0.5)
 
         flanks = []
 
@@ -3878,10 +3840,10 @@ def app_impacto():
             incluir_flancos = st.checkbox("Incluir flanqueos de impacto", value=True)
 
             flancos_base = [
-                {"nombre": "Muro lateral 1", "lnw": 62.0, "kij": 5.0, "activo": True},
-                {"nombre": "Muro lateral 2", "lnw": 62.0, "kij": 5.0, "activo": True},
-                {"nombre": "Fachada / elemento lateral", "lnw": 65.0, "kij": 5.0, "activo": False},
-                {"nombre": "Tabique separador / elemento vertical", "lnw": 60.0, "kij": 8.0, "activo": False},
+                {"nombre": "Muro lateral 1", "kij": 5.0, "activo": True},
+                {"nombre": "Muro lateral 2", "kij": 5.0, "activo": True},
+                {"nombre": "Fachada / elemento lateral", "kij": 5.0, "activo": False},
+                {"nombre": "Tabique separador / elemento vertical", "kij": 8.0, "activo": False},
             ]
 
             if incluir_flancos:
@@ -3889,13 +3851,27 @@ def app_impacto():
                     with st.expander(fl["nombre"], expanded=fl["activo"]):
                         activo = st.checkbox("Activar este flanco", value=fl["activo"], key=f"imp_fl_active_{i}")
 
-                        lnw_f = st.number_input(
-                            "Nivel de impacto equivalente del flanco Ln,w [dB]",
-                            value=fl["lnw"],
-                            min_value=35.0,
-                            max_value=95.0,
-                            step=1.0,
-                            key=f"imp_lnw_f_{i}"
+                        path_cols = st.columns(3)
+                        rw_source = path_cols[0].number_input(
+                            "R emisor [dB]", 10.0, 90.0, 50.0, 1.0,
+                            key=f"imp_rw_source_{i}",
+                        )
+                        rw_receiver = path_cols[1].number_input(
+                            "R receptor [dB]", 10.0, 90.0, 50.0, 1.0,
+                            key=f"imp_rw_receiver_{i}",
+                        )
+                        union_length = path_cols[2].number_input(
+                            "Longitud unión [m]", 0.1, 50.0, 3.0, 0.1,
+                            key=f"imp_length_{i}",
+                        )
+                        mass_cols = st.columns(2)
+                        mass_source = mass_cols[0].number_input(
+                            "m' emisor [kg/m²]", 1.0, 2000.0, 300.0, 1.0,
+                            key=f"imp_mass_source_{i}",
+                        )
+                        mass_receiver = mass_cols[1].number_input(
+                            "m' receptor [kg/m²]", 1.0, 2000.0, 180.0, 1.0,
+                            key=f"imp_mass_receiver_{i}",
                         )
 
                         tipo_union = st.selectbox(
@@ -3914,7 +3890,9 @@ def app_impacto():
                             key=f"imp_tipo_union_{i}"
                         )
 
-                        kij_sugerido = impact_kij_auto_value(tipo_union)
+                        kij_sugerido = None if tipo_union == "Manual" else junction_kij(
+                            tipo_union, mass_source, mass_receiver
+                        )
 
                         if kij_sugerido is None:
                             kij = st.number_input(
@@ -3935,15 +3913,21 @@ def app_impacto():
                         flanks.append({
                             "activo": activo,
                             "nombre": fl["nombre"],
-                            "lnw": float(lnw_f),
                             "kij": float(kij),
+                            "rw_source": float(rw_source),
+                            "rw_receiver": float(rw_receiver),
+                            "length": float(union_length),
+                            "mass_source": float(mass_source),
+                            "mass_receiver": float(mass_receiver),
+                            "junction_type": tipo_union,
                         })
 
             with st.expander("¿Qué calcula el modo ISO 12354-2?"):
                 st.markdown(
                     """
                     El modo ISO 12354-2 suma energéticamente el camino directo de impacto y los caminos flanqueantes.
-                    Cada flanco se representa por un nivel Ln,w equivalente y una corrección de unión Kij.
+                    Cada camino utiliza los índices R de los elementos emisor y receptor, la longitud de unión,
+                    sus masas superficiales y Kij. SONARA conserva cada contribución por separado.
                     """
                 )
 
@@ -3967,20 +3951,42 @@ def app_impacto():
 
         ln_total = energetic_sum_levels(levels)
     else:
-        flanks_calc = []
+        impact_junctions = []
         for fl in flanks:
             if not fl.get("activo", False):
                 continue
-            fl_curve = impact_flank_curve_from_lnw(freqs, fl["lnw"], fl["kij"])
-            fl_new = dict(fl)
-            fl_new["curve"] = fl_curve
-            flanks_calc.append(fl_new)
+            src_freqs, src_curve = _iso_reference_curve_from_rw(fl["rw_source"])
+            rec_freqs, rec_curve = _iso_reference_curve_from_rw(fl["rw_receiver"])
+            impact_junctions.append({
+                "active": True,
+                "name": fl["nombre"],
+                "source_curve": src_curve,
+                "receiver_curve": rec_curve,
+                "frequencies": src_freqs,
+                "junction_type": fl.get("junction_type", "T"),
+                "kij": fl["kij"],
+                "mass_source": fl["mass_source"],
+                "mass_receiver": fl["mass_receiver"],
+                "length": fl["length"],
+            })
             active_flank_names.append(fl["nombre"])
+        impact_result = impact_detailed(
+            ln0_curve, freqs,
+            floor_improvement=delta_piso,
+            ceiling_improvement=delta_cielo,
+            separating_area=area_entrepiso,
+            receiver_t=t_receptor,
+            junctions=impact_junctions,
+            t0=0.5,
+        )
+        freqs = impact_result["frequencies"]
+        ln_total = impact_result["total_curve"]
 
-        ln_total = impact_iso12354_2_sum(ln_direct, flanks_calc)
-
-    # Normalización a T0 = 0.5 s. Si T receptor > 0.5, L'nT disminuye.
-    lnT = ln_total - 10.0 * np.log10(max(t_receptor, 0.1) / 0.5)
+    # Normalización a T0 = 0,5 s.
+    if modo_impacto == "Simplificado":
+        lnT = ln_total - 10.0 * np.log10(max(t_receptor, 0.1) / 0.5)
+    else:
+        lnT = impact_result["normalized_curve"]
 
     lnw, ci = iso717_impact_rating(freqs, ln_total)
     lntw, ci_t = iso717_impact_rating(freqs, lnT)
@@ -4056,6 +4062,12 @@ def app_impacto():
                                  name="Losa desnuda Ln,0", line=dict(color="#4F7CFF", width=3), marker=dict(size=6)))
         fig.add_trace(go.Scatter(x=freqs, y=np.round(ln_direct, 1), mode="lines+markers",
                                  name="Directo con piso/cielo", line=dict(color="#00D4FF", width=3), marker=dict(size=6)))
+        if modo_impacto == "ISO 12354-2":
+            for path in impact_result["paths"][1:]:
+                fig.add_trace(go.Scatter(
+                    x=freqs, y=np.round(path["curve"], 1), mode="lines",
+                    name=path["name"], line=dict(width=1.2, dash="dot"), opacity=0.7,
+                ))
         fig.add_trace(go.Scatter(x=freqs, y=np.round(lnT, 1), mode="lines+markers",
                                  name="L'nT", line=dict(color="#00E08A", width=3), marker=dict(size=6)))
         fig.add_trace(go.Scatter(x=freqs, y=np.round(delta_piso, 1), mode="lines",
@@ -7102,10 +7114,56 @@ def app_fachada_iso():
 
     used_area = sum(item["area"] for item in components)
     if abs(used_area - facade_area) > 0.05:
-        st.warning(f"La suma de componentes es {used_area:.2f} m² y no coincide con el área total ({facade_area:.2f} m²). El cálculo usa la suma declarada.")
+        st.warning(f"La suma de componentes es {used_area:.2f} m² y no coincide con el área total ({facade_area:.2f} m²). Corrija las áreas: ISO 12354-3 normaliza la transmisión con el área total de fachada.")
+
+    small_elements = []
+    joints = []
+    with st.expander("Elementos pequeños y juntas (ISO 12354-3)"):
+        include_small = st.checkbox("Agregar elemento pequeño Dn,e", value=False, key="fac_small_active")
+        if include_small:
+            s1, s2, s3 = st.columns(3)
+            small_name = s1.text_input("Nombre elemento pequeño", "Aireador", key="fac_small_name")
+            small_dne = s2.number_input("Dn,e,w [dB]", 0.0, 90.0, 35.0, 1.0, key="fac_small_dne")
+            small_count = s3.number_input("Cantidad", 1, 100, 1, 1, key="fac_small_count")
+            small_elements.append({
+                "name": small_name,
+                "dne_curve": manual_airborne_curve(small_dne, 0.0, THIRD_OCTAVE_100_3150),
+                "frequencies": THIRD_OCTAVE_100_3150,
+                "count": small_count,
+            })
+        include_joint = st.checkbox("Agregar junta o ranura Rs", value=False, key="fac_joint_active")
+        if include_joint:
+            j1, j2, j3 = st.columns(3)
+            joint_name = j1.text_input("Nombre junta", "Encuentro perimetral", key="fac_joint_name")
+            joint_rs = j2.number_input("Rs,w [dB]", 0.0, 100.0, 45.0, 1.0, key="fac_joint_rs")
+            joint_length = j3.number_input("Longitud [m]", 0.1, 500.0, 4.0, 0.1, key="fac_joint_length")
+            joints.append({
+                "name": joint_name,
+                "rs_curve": manual_airborne_curve(joint_rs, 0.0, THIRD_OCTAVE_100_3150),
+                "frequencies": THIRD_OCTAVE_100_3150,
+                "length": joint_length,
+            })
 
     try:
-        result = facade_spectral_prediction(components, volume, facade_area, shape, lden)
+        detailed = facade_detailed(
+            [{"name": c["name"], "area": c["area"], "curve": c["curve"], "frequencies": c["freqs"]}
+             for c in components],
+            volume, facade_area, shape,
+            small_elements=small_elements, joints=joints,
+        )
+        numbers = airborne_single_numbers(detailed["frequencies"], detailed["apparent_curve"])
+        d_numbers = airborne_single_numbers(detailed["frequencies"], detailed["d2mnt_curve"])
+        result = {
+            "freqs": detailed["frequencies"],
+            "curve": detailed["apparent_curve"],
+            "rw_composite": float(numbers["weighted"]),
+            "c_composite": float(numbers["c"]),
+            "ctr_composite": float(numbers["ctr"]),
+            "ratr_composite": float(numbers["weighted"] + numbers["ctr"]),
+            "geometry_correction": float(detailed["geometry_correction"]),
+            "dnt_a_tr": float(d_numbers["weighted"] + d_numbers["ctr"]),
+        }
+        result["indoor_from_lden"] = None if lden is None else float(lden) - result["dnt_a_tr"]
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -7172,7 +7230,13 @@ def app_instalaciones_iso():
     with c1:
         event_type = st.selectbox("Tipo de funcionamiento", ["Continuo (LAeq)", "Intermitente (LAFmax estimado)"], key="svc_type")
     with c2:
-        adjacent = st.selectbox("Ubicación de la fuente", ["Mismo recinto", "Recinto adyacente"], key="svc_location") == "Recinto adyacente"
+        service_kind_label = st.selectbox(
+            "Vía de transmisión",
+            ["Aérea · mismo recinto", "Aérea · recinto adyacente", "Boca de conducto", "Estructural"],
+            key="svc_location",
+        )
+        adjacent = service_kind_label == "Aérea · recinto adyacente"
+        structure_borne = service_kind_label == "Estructural"
     with c3:
         distance = st.number_input("Distancia fuente-receptor [m]", 0.2, 50.0, 2.0, 0.1, key="svc_distance")
     with c4:
@@ -7191,23 +7255,101 @@ def app_instalaciones_iso():
     r_defaults = [28, 34, 40, 46, 51, 55, 58]
     lw_values, r_values, extra_values = [], [], []
     headers = st.columns([1, 1, 1, 1])
-    for col, label in zip(headers, ["Banda", "Lw [dB]", "R separador [dB]", "Atenuación adicional [dB]"]):
+    transfer_header = "Transferencia instalada [dB]" if structure_borne else "R separador [dB]"
+    source_header = "Nivel de fuerza/velocidad [dB]" if structure_borne else "Lw [dB]"
+    for col, label in zip(headers, ["Banda", source_header, transfer_header, "Atenuación adicional [dB]"]):
         col.markdown(f"**{label}**")
     for idx, freq in enumerate(OCTAVE_EQUIPMENT):
         cols = st.columns([1, 1, 1, 1])
         cols[0].markdown(f"{freq} Hz")
         lw_values.append(cols[1].number_input("Lw", 0.0, 140.0, float(lw_defaults[idx]), 1.0, key=f"svc_lw_{freq}", label_visibility="collapsed"))
-        r_values.append(cols[2].number_input("R", 0.0, 100.0, float(r_defaults[idx]), 1.0, key=f"svc_r_{freq}", label_visibility="collapsed", disabled=not adjacent))
+        if structure_borne:
+            transfer_default = [-35, -37, -40, -43, -46, -49, -52][idx]
+            r_values.append(cols[2].number_input("Transferencia", -120.0, 60.0, float(transfer_default), 1.0, key=f"svc_r_{freq}", label_visibility="collapsed"))
+        else:
+            r_values.append(cols[2].number_input("R", 0.0, 100.0, float(r_defaults[idx]), 1.0, key=f"svc_r_{freq}", label_visibility="collapsed", disabled=not adjacent))
         extra_values.append(cols[3].number_input("Atenuación", 0.0, 80.0, 0.0, 1.0, key=f"svc_extra_{freq}", label_visibility="collapsed"))
     separator_area = st.number_input("Área del separador [m²]", 1.0, 500.0, 10.0, 0.5, key="svc_sep_area", disabled=not adjacent)
 
-    result = service_equipment_airborne(
-        lw_values, distance, directivity, source_abs, receiver_abs,
-        reduction_bands=r_values if adjacent else None,
-        separating_area=separator_area if adjacent else None,
-        receiver_t=receiver_t,
-        extra_attenuation=extra_values,
+    if structure_borne:
+        service_kind = "structure_borne"
+    elif service_kind_label == "Boca de conducto":
+        service_kind = "duct_outlet"
+    elif adjacent:
+        service_kind = "airborne_adjacent"
+    else:
+        service_kind = "airborne_same_room"
+    service_path = {
+        "name": "Transmisión principal",
+        "kind": service_kind,
+        "source_curve": lw_values,
+        "frequencies": ISO12354_OCTAVE,
+        "attenuation_curve": extra_values,
+        "distance": distance,
+        "directivity": directivity,
+        "source_absorption": source_abs,
+        "separating_area": separator_area,
+    }
+    if adjacent:
+        service_path["reduction_curve"] = r_values
+    if structure_borne:
+        service_path["transfer_curve"] = r_values
+    service_paths = [service_path]
+    with st.expander("Agregar vías simultáneas"):
+        extra_count = st.number_input("Vías adicionales", 0, 5, 0, 1, key="svc_extra_path_count")
+        for path_index in range(int(extra_count)):
+            st.markdown(f"**Vía adicional {path_index + 1}**")
+            pc1, pc2 = st.columns(2)
+            path_name = pc1.text_input("Nombre", f"Vía {path_index + 2}", key=f"svc_path_name_{path_index}")
+            path_kind_label = pc2.selectbox(
+                "Tipo", ["Aérea mismo recinto", "Aérea adyacente", "Boca de conducto", "Estructural"],
+                key=f"svc_path_kind_{path_index}",
+            )
+            source_text = st.text_input(
+                "Espectro fuente 63–4000 Hz (7 valores separados por coma)",
+                "70,68,66,64,61,58,55", key=f"svc_path_source_{path_index}",
+            )
+            secondary_label = "Transferencia instalada" if path_kind_label == "Estructural" else "R del separador"
+            secondary_default = "-35,-37,-40,-43,-46,-49,-52" if path_kind_label == "Estructural" else "28,34,40,46,51,55,58"
+            secondary_text = st.text_input(
+                f"{secondary_label} (7 valores)", secondary_default,
+                key=f"svc_path_secondary_{path_index}",
+            )
+            try:
+                source_curve = [float(v.strip()) for v in source_text.split(",")]
+                secondary_curve = [float(v.strip()) for v in secondary_text.split(",")]
+                if len(source_curve) != 7 or len(secondary_curve) != 7:
+                    raise ValueError
+            except ValueError:
+                st.error("Cada espectro adicional debe contener exactamente 7 valores numéricos.")
+                continue
+            kind_map = {
+                "Aérea mismo recinto": "airborne_same_room",
+                "Aérea adyacente": "airborne_adjacent",
+                "Boca de conducto": "duct_outlet",
+                "Estructural": "structure_borne",
+            }
+            extra_path = {
+                "name": path_name, "kind": kind_map[path_kind_label],
+                "source_curve": source_curve, "frequencies": ISO12354_OCTAVE,
+                "attenuation_curve": [0.0] * 7, "distance": distance,
+                "directivity": directivity, "source_absorption": source_abs,
+                "separating_area": separator_area,
+            }
+            if extra_path["kind"] == "structure_borne":
+                extra_path["transfer_curve"] = secondary_curve
+            elif extra_path["kind"] == "airborne_adjacent":
+                extra_path["reduction_curve"] = secondary_curve
+            service_paths.append(extra_path)
+    detailed_service = service_equipment_detailed(
+        service_paths, receiver_absorption=receiver_abs,
+        receiver_t=receiver_t, t0=0.5,
     )
+    result = {
+        "lp": detailed_service["total_curve"],
+        "lp_normalized": detailed_service["normalized_curve"],
+        "la_normalized": detailed_service["la_normalized"],
+    }
     descriptor = "LAFmax,nT proyectado" if event_type.startswith("Intermitente") else "LAeq,nT proyectado"
     st.metric(descriptor, f"{result['la_normalized']:.1f} dB(A)")
     if event_type.startswith("Intermitente"):
@@ -7221,6 +7363,11 @@ def app_instalaciones_iso():
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
     fig = go.Figure()
+    for path in detailed_service["paths"]:
+        fig.add_trace(go.Scatter(
+            x=OCTAVE_EQUIPMENT, y=path["curve"], mode="lines",
+            name=path["name"], line=dict(width=1.2, dash="dot"), opacity=0.75,
+        ))
     fig.add_trace(go.Scatter(x=OCTAVE_EQUIPMENT, y=result["lp_normalized"], mode="lines+markers", name="Lp,nT", line=dict(color="#4F7CFF", width=3)))
     fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=OCTAVE_EQUIPMENT)
     fig.update_yaxes(title="Nivel [dB]")
@@ -7277,7 +7424,19 @@ def app_reverberacion_iso():
         preset = cols[2].selectbox("Material", list(presets), index=list(presets).index(default[2]), key=f"rev_preset_{idx}")
         surfaces.append({"name": name, "area": area, "alpha": presets[preset]})
 
-    result = reverberation_prediction(volume, floor_area, surfaces, method=method_label.lower())
+    detailed_room = room_absorption_detailed(
+        volume,
+        [{"name": s["name"], "area": s["area"], "alpha": s["alpha"],
+          "frequencies": [125, 250, 500, 1000, 2000, 4000]} for s in surfaces],
+        method=method_label.lower(),
+    )
+    mid_mask = (detailed_room["frequencies"] >= 250) & (detailed_room["frequencies"] <= 2000)
+    result = {
+        "absorption": detailed_room["equivalent_absorption"],
+        "reverberation_time": detailed_room["reverberation_time"],
+        "t_250_2000": float(np.mean(detailed_room["reverberation_time"][mid_mask])),
+        "a_over_sfloor_250_2000": float(np.mean(detailed_room["equivalent_absorption"][mid_mask]) / max(floor_area, 1e-9)),
+    }
     c1, c2 = st.columns(2)
     c1.metric("T promedio 250–2000 Hz", f"{result['t_250_2000']:.2f} s")
     c2.metric("A/S piso promedio", f"{result['a_over_sfloor_250_2000']:.2f}")
@@ -7308,6 +7467,161 @@ def app_reverberacion_iso():
     }, key_prefix="save_reverberation")
 
 
+def app_exterior_iso():
+    st.markdown("<div class='sonara-card-title'>ISO 12354-4 · transmisión desde el interior al exterior</div>", unsafe_allow_html=True)
+    _iso_design_notice()
+    st.caption("Calcula la potencia sonora radiada por cada elemento de la envolvente y conserva su contribución espectral.")
+
+    spectrum_defaults = [72, 73, 74, 75, 73, 70, 67, 64, 61, 58, 55, 52, 49, 46, 43, 40]
+    target_freqs = np.asarray(THIRD_OCTAVE_100_3150, dtype=float)
+    st.markdown("##### Nivel interior por bandas")
+    indoor = []
+    for start in range(0, len(target_freqs), 4):
+        cols = st.columns(4)
+        for offset, col in enumerate(cols):
+            idx = start + offset
+            if idx >= len(target_freqs):
+                continue
+            frequency = int(target_freqs[idx])
+            indoor.append(col.number_input(
+                f"{frequency} Hz [dB]", 0.0, 140.0, float(spectrum_defaults[idx]), 1.0,
+                key=f"outdoor_lp_{frequency}",
+            ))
+
+    count = st.slider("Elementos radiantes", 1, 6, 2, key="outdoor_count")
+    elements = []
+    defaults = [("Muro", 20.0, 50.0, -5.0), ("Ventana", 4.0, 32.0, -6.0)]
+    for idx in range(count):
+        default = defaults[idx] if idx < len(defaults) else (f"Elemento {idx + 1}", 2.0, 35.0, -5.0)
+        with st.expander(default[0], expanded=idx < 2):
+            c1, c2, c3, c4 = st.columns(4)
+            name = c1.text_input("Nombre", default[0], key=f"outdoor_name_{idx}")
+            area = c2.number_input("Área [m²]", 0.01, 10000.0, default[1], 0.25, key=f"outdoor_area_{idx}")
+            rw = c3.number_input("Rw [dB]", 0.0, 100.0, default[2], 1.0, key=f"outdoor_rw_{idx}")
+            ctr = c4.number_input("Ctr [dB]", -20.0, 0.0, default[3], 1.0, key=f"outdoor_ctr_{idx}")
+            correction = st.number_input("Corrección de montaje/aberturas [dB]", -30.0, 30.0, 0.0, 0.5, key=f"outdoor_corr_{idx}")
+            elements.append({
+                "name": name, "area": area,
+                "curve": manual_airborne_curve(rw, ctr, target_freqs),
+                "frequencies": target_freqs, "correction": correction,
+            })
+
+    result = outdoor_sound_power_detailed(indoor, target_freqs, elements)
+    st.metric("Potencia sonora exterior LWA", f"{result['lwa']:.1f} dB(A)")
+    frame = pd.DataFrame({"Frecuencia [Hz]": result["frequencies"], "Lw exterior [dB]": np.round(result["sound_power_curve"], 1)})
+    for path in result["paths"]:
+        frame[path["name"]] = np.round(path["curve"], 1)
+    st.dataframe(frame, use_container_width=True, hide_index=True)
+    fig = go.Figure()
+    for path in result["paths"]:
+        fig.add_trace(go.Scatter(x=result["frequencies"], y=path["curve"], mode="lines", name=path["name"], line=dict(dash="dot")))
+    fig.add_trace(go.Scatter(x=result["frequencies"], y=result["sound_power_curve"], mode="lines+markers", name="Total", line=dict(color="#00E08A", width=4)))
+    fig.update_xaxes(type="log", title="Frecuencia [Hz]")
+    fig.update_yaxes(title="Lw [dB]")
+    fig.update_layout(template="plotly_dark", height=390, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.download_button("⬇ Descargar ISO 12354-4", frame.to_csv(index=False).encode("utf-8"), "sonara_iso12354_4.csv", "text/csv", key="outdoor_download")
+
+
+def app_lluvia():
+    st.markdown("<div class='sonara-card-title'>Ruido de lluvia · cubierta simple y doble/MAM</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='result-note'>Motor físico trazable: TRainCalcParameters → TDrop → TRoof → radiación. "
+        "En cubierta doble agrega TRoofDoublePanel, transferencia de dos puertos y resonancia masa–aire–masa.</div>",
+        unsafe_allow_html=True,
+    )
+    materials = material_db()
+    eligible = [name for name, value in materials.items() if float(value.get("dens", 0) or 0) > 0 and float(value.get("E", 0) or 0) > 0]
+    if not eligible:
+        st.error("No hay materiales con densidad y módulo elástico disponibles.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    roof_type = c1.selectbox("Sistema", ["Cubierta simple", "Cubierta doble / cielo MAM"], key="rain_roof_type")
+    rain_type = c2.selectbox("Lluvia", list(RAIN_PRESETS), index=2, key="rain_type")
+    area = c3.number_input("Área de cubierta [m²]", 0.5, 10000.0, 30.0, 0.5, key="rain_area")
+    slope = c4.number_input("Pendiente [°]", 0.0, 85.0, 15.0, 1.0, key="rain_slope")
+    preset = RAIN_PRESETS[rain_type]
+    p1, p2, p3 = st.columns(3)
+    intensity = p1.number_input("Intensidad [mm/h]", 0.1, 500.0, float(preset["intensity_mm_h"]), 0.5, key="rain_intensity")
+    diameter = p2.number_input("Diámetro medio gota [mm]", 0.1, 6.0, float(preset["drop_diameter_mm"]), 0.1, key="rain_diameter")
+    velocity = p3.number_input("Velocidad gota [m/s]", 0.1, 15.0, float(preset["velocity_m_s"]), 0.1, key="rain_velocity")
+
+    st.markdown("##### Hoja exterior")
+    default_outer = next((i for i, name in enumerate(eligible) if "acero" in name.lower()), 0)
+    m1, m2, m3, m4 = st.columns(4)
+    outer_name = m1.selectbox("Material exterior", eligible, index=default_outer, key="rain_outer")
+    outer = materials[outer_name]
+    outer_thickness_mm = m2.number_input("Espesor exterior [mm]", 0.1, 500.0, max(float(outer.get("espesor", 1.0) or 1.0), 0.1), 0.1, key="rain_outer_thickness")
+    joist_spacing = m3.number_input("Separación apoyos [m]", 0.1, 5.0, 0.6, 0.05, key="rain_joists")
+    edge_damping = m4.number_input("Pérdida adicional de borde", 0.0, 0.5, 0.01, 0.005, key="rain_edge")
+
+    outer_result = rainfall_material_spectrum(
+        outer["dens"], outer_thickness_mm * 1e-3, outer["E"], outer.get("poisson", 0.3),
+        outer.get("eta", 0.02), intensity, slope_degrees=slope, roof_area=area,
+        drop_diameter_mm=diameter, velocity_m_s=velocity,
+        edge_damping=edge_damping, joist_spacing=joist_spacing,
+    )
+    radiating = outer_result
+    mam_frequency = None
+    if roof_type.startswith("Cubierta doble"):
+        st.markdown("##### Hoja interior y cavidad")
+        default_inner = next((i for i, name in enumerate(eligible) if "yeso" in name.lower()), 0)
+        i1, i2, i3, i4 = st.columns(4)
+        inner_name = i1.selectbox("Material interior", eligible, index=default_inner, key="rain_inner")
+        inner = materials[inner_name]
+        inner_thickness_mm = i2.number_input("Espesor interior [mm]", 0.1, 500.0, max(float(inner.get("espesor", 13.0) or 13.0), 0.1), 0.1, key="rain_inner_thickness")
+        cavity_mm = i3.number_input("Cavidad [mm]", 5.0, 2000.0, 150.0, 5.0, key="rain_cavity")
+        cavity_abs = i4.number_input("Pérdida/absorción cavidad", 0.0, 0.5, 0.03, 0.01, key="rain_cavity_abs")
+        radiating = double_roof_rain_spectrum(
+            outer_result, inner["dens"], inner_thickness_mm * 1e-3, cavity_mm * 1e-3,
+            inner["E"], inner.get("poisson", 0.3), inner.get("eta", 0.02), cavity_abs,
+        )
+        mam_frequency = radiating["mam_frequency"]
+
+    r1, r2 = st.columns(2)
+    volume = r1.number_input("Volumen receptor [m³]", 1.0, 100000.0, 75.0, 1.0, key="rain_volume")
+    reverberation = r2.number_input("TR receptor [s]", 0.1, 20.0, 0.6, 0.1, key="rain_tr")
+    indoor = rainfall_indoor_level(radiating["li_curve"], radiating["frequencies"], area, volume, reverberation)
+
+    cards = st.columns(4)
+    cards[0].metric("Nivel interior", f"{indoor['la_indoor']:.1f} dB(A)")
+    cards[1].metric("Masa exterior", f"{outer_result['surface_mass']:.1f} kg/m²")
+    cards[2].metric("Frecuencia crítica", f"{outer_result['critical_frequency']:.0f} Hz")
+    cards[3].metric("Resonancia MAM", "—" if mam_frequency is None else f"{mam_frequency:.0f} Hz")
+
+    frame = pd.DataFrame({
+        "Frecuencia [Hz]": indoor["frequencies"],
+        "Li exterior [dB]": np.round(outer_result["li_curve"], 1),
+        "Li hoja radiante [dB]": np.round(radiating["li_curve"], 1),
+        "Lw hoja radiante [dB]": np.round(radiating["sound_power_curve"], 1),
+        "Lp interior [dB]": np.round(indoor["lp_curve"], 1),
+    })
+    st.dataframe(frame, use_container_width=True, hide_index=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=indoor["frequencies"], y=outer_result["li_curve"], mode="lines", name="Hoja exterior", line=dict(dash="dot")))
+    if mam_frequency is not None:
+        fig.add_trace(go.Scatter(x=radiating["frequencies"], y=radiating["li_curve"], mode="lines", name="Hoja interior"))
+        fig.add_vline(x=mam_frequency, line_dash="dash", line_color="#FF8A1F", annotation_text="MAM")
+    fig.add_trace(go.Scatter(x=indoor["frequencies"], y=indoor["lp_curve"], mode="lines+markers", name="Recinto", line=dict(color="#00E08A", width=4)))
+    fig.update_xaxes(type="log", title="Frecuencia [Hz]")
+    fig.update_yaxes(title="Nivel [dB]")
+    fig.update_layout(template="plotly_dark", height=420, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Trazado ejecutado: " + " → ".join(radiating["calculation_trace"]))
+    st.download_button("⬇ Descargar ruido de lluvia", frame.to_csv(index=False).encode("utf-8"), "sonara_lluvia.csv", "text/csv", key="rain_download")
+    solution_save_widget({
+        "nombre": f"Lluvia {roof_type} {indoor['la_indoor']:.1f} dB(A)",
+        "tipo_calculo": "Ruido de lluvia",
+        "resultado_label": f"LA interior {indoor['la_indoor']:.1f} dB(A)",
+        "valor": float(indoor["la_indoor"]),
+        "frecuencias": list(map(float, indoor["frequencies"])),
+        "curva": list(map(float, indoor["lp_curve"])),
+        "trazado": radiating["calculation_trace"],
+        "descripcion": "Predicción física de lluvia; la clasificación y aceptación corresponden al alumno.",
+    }, key_prefix="save_rain")
+
+
 def app_calculadora_master():
     st.markdown(
         "<h1 style='color:#FFFFFF;margin-bottom:8px;'>Calculadora</h1>",
@@ -7321,8 +7635,10 @@ def app_calculadora_master():
             "Ruido de impacto",
             "Transmisión entre recintos (ISO 12354-1)",
             "Fachada (ISO 12354-3)",
+            "Radiación al exterior (ISO 12354-4)",
             "Ruido de instalaciones (EN 12354-5)",
-            "Reverberación (EN 12354-6)"
+            "Reverberación (EN 12354-6)",
+            "Ruido de lluvia",
         ],
         horizontal=True,
         key="calc_master_submodule"
@@ -7338,10 +7654,14 @@ def app_calculadora_master():
         app_iso12354()
     elif sub == "Fachada (ISO 12354-3)":
         app_fachada_iso()
+    elif sub == "Radiación al exterior (ISO 12354-4)":
+        app_exterior_iso()
     elif sub == "Ruido de instalaciones (EN 12354-5)":
         app_instalaciones_iso()
     elif sub == "Reverberación (EN 12354-6)":
         app_reverberacion_iso()
+    elif sub == "Ruido de lluvia":
+        app_lluvia()
 
 
 
@@ -8383,15 +8703,16 @@ def app_project_calculator_embedded(project, requirement):
 
     calc_options = [
         "Solución compuesta", "Ruido aéreo", "Ruido de impacto", "ISO 12354-1",
-        "Fachada ISO 12354-3", "Instalaciones EN 12354-5", "Reverberación EN 12354-6",
+        "Fachada ISO 12354-3", "Exterior ISO 12354-4", "Instalaciones EN 12354-5",
+        "Reverberación EN 12354-6", "Ruido de lluvia",
     ]
     default_index = 2 if calc_mode_default == "Ruido de impacto" else 0
     if tipo_elemento_req == "Fachada":
         default_index = 4
     elif indicador in ["LAeq,nT", "LAFmax,nT", "NC", "NR"]:
-        default_index = 5
-    elif indicador in ["T", "TR", "A/S"]:
         default_index = 6
+    elif indicador in ["T", "TR", "A/S"]:
+        default_index = 7
     calc_mode = st.radio(
         "Calculadora del requerimiento",
         calc_options,
@@ -8420,10 +8741,14 @@ def app_project_calculator_embedded(project, requirement):
         app_iso12354()
     elif calc_mode == "Fachada ISO 12354-3":
         app_fachada_iso()
+    elif calc_mode == "Exterior ISO 12354-4":
+        app_exterior_iso()
     elif calc_mode == "Instalaciones EN 12354-5":
         app_instalaciones_iso()
-    else:
+    elif calc_mode == "Reverberación EN 12354-6":
         app_reverberacion_iso()
+    else:
+        app_lluvia()
 
 
 def app_proyectos():

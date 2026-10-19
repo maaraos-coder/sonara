@@ -3,6 +3,7 @@
 ## Estructura
 - `app.py`: aplicación principal.
 - `sonara_engine.py`: motor físico principal para placas y sistemas masa-aire-masa.
+- `iso12354_engine.py`: motor detallado ISO/EN 12354 partes 1 a 6 y ruido de lluvia.
 - `material_catalog.py`: acceso al catálogo acústico normalizado.
 - `iso_design.py`: motor verificable de descriptores acústicos de proyecto.
 - `data/acoustic_catalog.sqlite.xz.part-*`: catálogo completo de 3.646 registros,
@@ -24,14 +25,16 @@ streamlit run app.py
 ## Alcance acústico docente
 
 La calculadora entrega valores proyectados de aislamiento aéreo, impacto,
-fachada, ruido de instalaciones y reverberación. No asigna automáticamente
+fachada, radiación al exterior, ruido de instalaciones, reverberación y lluvia.
+No asigna automáticamente
 clases ISO/TS 19488:2021; la consulta de las tablas, clasificación y
 justificación corresponden al estudiante.
 
-`SONARA-PHYSICS-1` es el motor principal de ruido aéreo. Calcula propiedades
+`SONARA-PHYSICS-1` calcula propiedades
 de placa isótropa, caminos resonante/no resonante y sistemas masa-aire-masa;
-ISO 717 e ISO 12354 consumen las curvas obtenidas. Hasta completar el banco de
-comparación, los resultados conservan carácter de proyecto y docencia.
+`SONARA-ISO12354-RAIN-1` consume esas curvas, ejecuta los caminos de las partes
+1 a 6 y el trazado físico de lluvia simple o doble/MAM. Hasta completar el
+banco de comparación, los resultados conservan carácter de proyecto y docencia.
 
 Ejecutar las pruebas del motor con:
 

@@ -1,4 +1,4 @@
-# Motor principal SONARA-PHYSICS-1
+# Motores principales SONARA-PHYSICS-1 y SONARA-ISO12354-RAIN-1
 
 ## Alcance incorporado
 
@@ -75,26 +75,53 @@ armando las matrices de masa y rigidez de las cavidades y resolviendo el
 problema generalizado de autovalores. Para dos hojas esto coincide con la
 expresión escalar clásica.
 
-## Métodos de proyecto conectados
+## Serie ISO/EN 12354 conectada al motor principal
 
-- ISO 717-1: Rw, C y Ctr.
-- ISO 12354-1: transmisión directa y flanqueos.
+- ISO 12354-1: transmisión aérea directa `Dd` y caminos `Df`, `Fd` y `Ff`
+  para cada unión, con suma energética, `R'` y `DnT`.
 - ISO 12354-2 / ISO 717-2: impacto, con selección de revestimiento medido o
-  modelo genérico/físico, cielo y caminos flanqueantes.
+  modelo genérico/físico, cielo y caminos estructurales flanqueantes.
 - ISO 12354-3 / ISO 717-1: fachadas compuestas por combinación energética de
-  los factores de transmisión de cada componente y de cada banda. Los
-  componentes pueden venir de SONARA-PHYSICS o de una entrada manual Rw/Ctr;
-  se entregan Rw, C, Ctr, RA,tr, corrección geométrica y D2m,nT,Atr.
-- Ruido de instalaciones por bandas de octava.
-- Reverberación por Sabine y Eyring.
+  elementos grandes, elementos pequeños `Dn,e` y juntas `Rs`.
+- ISO 12354-4: potencia sonora radiada desde recintos hacia el exterior,
+  desglosada por elemento de envolvente.
+- EN 12354-5: instalaciones por vías aérea en el mismo recinto, aérea entre
+  recintos, salida de conducto y transmisión estructural mediante función de
+  transferencia instalada.
+- EN 12354-6: absorción equivalente y reverberación mediante Sabine y Eyring.
+- ISO 717-1 e ISO 717-2: descriptores únicos y términos de adaptación.
+
+Cada módulo devuelve el espectro total y las contribuciones individuales. La
+interfaz no oculta los caminos detrás de un único ajuste global.
+
+## Ruido de lluvia
+
+El trazado implementado reproduce la arquitectura física identificada:
+
+1. `TRainCalcParameters`: intensidad, tipo y área de lluvia.
+2. `TDrop/DropIteration`: diámetro, masa, velocidad terminal y frecuencia de
+   impactos.
+3. `TRain`: potencia cinética normal incidente.
+4. `TRoof.calculateRain`: masa superficial, rigidez a flexión,
+   amortiguamiento, apoyos y frecuencia crítica.
+5. `NearFieldDropsRadiation`: radiación espectral de la hoja.
+6. `TRoofDoublePanel.InitRoof` y `calcISPLTwoPort`: transferencia de cubierta
+   doble y corrección de la resonancia masa-aire-masa.
+7. Conversión a presión sonora en el recinto mediante área de cubierta y
+   absorción equivalente.
+
+La cubierta triple no está habilitada como resultado validado: el propio
+programa analizado declara esa rama no operativa. La salida de lluvia de
+SONARA se identifica como predicción física y nunca como dato de laboratorio.
 
 SONARA entrega los valores acústicos. La clasificación ISO/TS 19488 continúa
 siendo realizada por el alumno.
 
 ## Validación pendiente
 
-El motor está activo como motor principal, pero su versión se mantiene visible
-en los resultados. Las próximas comparaciones deben registrar, por banda:
+Los motores están activos como fuente principal, pero su versión se mantiene
+visible. La implementación no equivale por sí sola a una certificación de
+conformidad del software. Las comparaciones deben registrar, por banda:
 
 - frecuencia;
 - resultado de referencia;
