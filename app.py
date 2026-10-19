@@ -10,7 +10,13 @@ import json
 import hashlib
 import secrets
 
-from academy_access import academy_student_by_email
+from academy_access import (
+    academy_bridge_configured,
+    academy_student_by_email,
+    create_sonara_account,
+    sonara_account_by_email,
+    update_sonara_account,
+)
 from iso_design import (
     OCTAVE_EQUIPMENT,
     airborne_single_numbers,
@@ -884,7 +890,10 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
         if col not in users.columns:
             users[col] = ""
 
-    exists = False if users.empty else email in users["email"].astype(str).str.lower().values
+    remote_user = sonara_account_by_email(email) if academy_bridge_configured() else None
+    exists = remote_user is not None or (
+        False if users.empty else email in users["email"].astype(str).str.lower().values
+    )
     if exists:
         return False, "Ese correo ya está registrado."
 
@@ -893,7 +902,7 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
     end = now + timedelta(days=TRIAL_DAYS)
     pw_hash, salt = hash_password(password)
 
-    new_user = pd.DataFrame([{
+    account = {
         "email": email,
         "password_hash": pw_hash,
         "salt": salt,
@@ -904,10 +913,14 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
         "last_login": now.isoformat(timespec="seconds"),
         "license_type": "academy" if is_academy else "trial",
         "estado": "active",
-        "trial_start": "" if is_academy else now.isoformat(timespec="seconds"),
-        "trial_end": "" if is_academy else end.isoformat(timespec="seconds"),
-    }])
+        "trial_start": None if is_academy else now.isoformat(timespec="seconds"),
+        "trial_end": None if is_academy else end.isoformat(timespec="seconds"),
+    }
 
+    if academy_bridge_configured() and not create_sonara_account(account):
+        return False, "No fue posible guardar la cuenta. Intenta nuevamente."
+
+    new_user = pd.DataFrame([account])
     pd.concat([users, new_user], ignore_index=True).to_csv(USERS_CSV, index=False)
     if is_academy:
         return True, "Cuenta Academy del Diplomado creada con acceso indefinido."
@@ -917,6 +930,16 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
 def authenticate_user(email, password):
     email = norm(email)
     users = read_csv(USERS_CSV)
+    remote_user = sonara_account_by_email(email) if academy_bridge_configured() else None
+
+    if remote_user is not None:
+        if not verify_password(password, remote_user.get("password_hash", ""), remote_user.get("salt", "")):
+            return False, "Contraseña incorrecta."
+        update_sonara_account(
+            email,
+            {"last_login": datetime.now().isoformat(timespec="seconds")},
+        )
+        return True, "Acceso correcto."
 
     if email in SUPERUSERS:
         # Primer acceso developer: si no está registrado, se crea con la contraseña ingresada.
@@ -952,6 +975,9 @@ def authenticate_user(email, password):
 
 def user_profile(email):
     email = norm(email)
+    remote_user = sonara_account_by_email(email) if academy_bridge_configured() else None
+    if remote_user is not None:
+        return remote_user
     users = read_csv(USERS_CSV)
     if not users.empty and "email" in users.columns:
         match = users[users["email"].astype(str).str.lower() == email]
@@ -962,12 +988,23 @@ def user_profile(email):
 
 def update_user_profile(email, nombre, empresa, cargo):
     email = norm(email)
+    remote_ok = False
+    if academy_bridge_configured():
+        remote_ok = update_sonara_account(
+            email,
+            {
+                "nombre": nombre,
+                "empresa": empresa,
+                "cargo": cargo,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
     users = read_csv(USERS_CSV)
     if users.empty or "email" not in users.columns:
-        return False
+        return remote_ok
     idxs = users[users["email"].astype(str).str.lower() == email].index
     if not len(idxs):
-        return False
+        return remote_ok
     idx = idxs[0]
     users.loc[idx, "nombre"] = nombre
     users.loc[idx, "empresa"] = empresa
@@ -1012,6 +1049,7 @@ def get_license(email):
     academy = read_csv(ACADEMY_CSV)
     premium = read_csv(PREMIUM_CSV)
     users = read_csv(USERS_CSV)
+    remote_user = sonara_account_by_email(email) if academy_bridge_configured() else None
 
     if not academy.empty and "email" in academy.columns:
         match = academy[academy["email"].astype(str).str.lower() == email]
@@ -1028,6 +1066,48 @@ def get_license(email):
     # Una cuenta Academy ya reconocida conserva su acceso aunque Supabase esté
     # temporalmente fuera de servicio. No se almacenan RUT ni credenciales del
     # laboratorio en SONARA.
+    if remote_user is not None and str(remote_user.get("license_type", "")).lower() == "academy":
+        return {
+            "allowed": True,
+            "type": "academy",
+            "days_left": None,
+            "expires": "indefinida",
+            "name": remote_user.get("nombre") or email,
+        }
+
+    if remote_user is not None and str(remote_user.get("license_type", "")).lower() == "premium":
+        return {
+            "allowed": str(remote_user.get("estado", "")).lower() == "active",
+            "type": "premium",
+            "days_left": None,
+            "expires": "activa",
+            "name": remote_user.get("nombre") or email,
+        }
+
+    if remote_user is not None and str(remote_user.get("license_type", "")).lower() == "trial":
+        update_sonara_account(email, {"last_login": now.isoformat(timespec="seconds")})
+        try:
+            end = datetime.fromisoformat(str(remote_user.get("trial_end", "")).replace("Z", "+00:00"))
+            now_for_end = datetime.now(end.tzinfo) if end.tzinfo else now
+        except Exception:
+            end = now - timedelta(days=1)
+            now_for_end = now
+        if now_for_end <= end:
+            return {
+                "allowed": True,
+                "type": "trial",
+                "days_left": max(0, (end.date() - now_for_end.date()).days + 1),
+                "expires": end.strftime("%d/%m/%Y"),
+                "name": remote_user.get("nombre") or email,
+            }
+        return {
+            "allowed": False,
+            "type": "expired",
+            "days_left": 0,
+            "expires": end.strftime("%d/%m/%Y"),
+            "name": remote_user.get("nombre") or email,
+        }
+
     local_match = pd.DataFrame()
     if not users.empty and "email" in users.columns:
         local_match = users[users["email"].astype(str).str.lower() == email]
@@ -1044,6 +1124,17 @@ def get_license(email):
     # trial previa en Academy cuando el correo coincide con un alumno activo.
     academy_student = academy_student_by_email(email)
     if academy_student is not None:
+        update_sonara_account(
+            email,
+            {
+                "license_type": "academy",
+                "estado": "active",
+                "trial_start": None,
+                "trial_end": None,
+                "nombre": academy_student.get("display_name") or email,
+                "updated_at": now.isoformat(timespec="seconds"),
+            },
+        )
         if len(local_match):
             idx = local_match.index[0]
             users.loc[idx, "license_type"] = "academy"
