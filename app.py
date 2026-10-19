@@ -20,6 +20,7 @@ from academy_access import (
 from iso_design import (
     OCTAVE_EQUIPMENT,
     airborne_single_numbers,
+    compare_predicted_measured,
     dnt_from_apparent_curve,
     facade_single_numbers,
     impact_rating,
@@ -27,13 +28,27 @@ from iso_design import (
     service_equipment_airborne,
     transmission_average_db,
 )
+from material_catalog import (
+    browse_catalog,
+    calculation_materials,
+    catalog_available,
+    catalog_summary,
+)
+from sonara_engine import (
+    ENGINE_ID,
+    combine_bonded_layers as engine_combine_bonded_layers,
+    double_leaf_tl as engine_double_leaf_tl,
+    non_resonant_tl as engine_non_resonant_tl,
+    plate_properties as engine_plate_properties,
+    single_leaf_tl as engine_single_leaf_tl,
+)
 
 # =========================================================
 # SONARA - app.py
-# v0.9.0 con motor acústico WALLS portado desde MATLAB
+# Motor físico principal SONARA-PHYSICS
 # =========================================================
 
-APP_VERSION = "BETA ISO-DESIGN"
+APP_VERSION = "BETA 0.11 · SONARA-PHYSICS"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -1474,7 +1489,7 @@ def login_page():
 
 def default_materials_dataframe():
     """
-    Base de materiales original AKUZOFT/WALLS + campos de cubicación/costos.
+    Base editable SONARA + campos de cubicación/costos.
     Se guarda en data/materiales_sonara.csv para edición desde SONARA.
     """
 
@@ -1513,40 +1528,40 @@ def default_materials_dataframe():
         "Mano de obra referencial",
     ]
 
-    # espesor_mm, densidad_kg_m3, modulo_young_Pa, eta
+    # espesor_mm, densidad_kg_m3, modulo_young_Pa, eta, poisson
     datos = [
-        [15, 735, 2550000000, 0.033],
-        [15, 786, 2980000000, 0.052],
-        [150, 2340, 11000000000, 0.006],
-        [110, 1600, 8901000000, 0.003],
-        [1, 6976, 157000000000, 0.033],
-        [3, 2900, 85220000000, 0.010],
-        [1, 11000, 15300000000, 0.050],
-        [1, 8960, 140100000000, 0.010],
-        [1.84, 1900, 265000000, 0.030],
-        [4, 920, 30000000, 0.010],
-        [10, 2200, 70000000000, 0.005],
-        [20, 2600, 50000000000, 0.005],
-        [8, 1327, 8320000000, 0.028],
-        [2.4, 971, 3560000000, 0.058],
-        [18, 619, 3060000000, 0.045],
-        [18, 686, 3590000000, 0.040],
-        [12, 635, 2980000000, 0.038],
-        [11.1, 623, 4680000000, 0.030],
-        [9, 545, 8230000000, 0.024],
-        [12, 488, 5150000000, 0.024],
-        [3.8, 1997, 31200000000, 0.012],
-        [6, 2522, 66800000000, 0.014],
-        [6, 2500, 50720000000, 0.060],
-        [50, 40, 0, 0],
-        [50, 60, 0, 0],
-        [50, 80, 0, 0],
-        [60, 0, 0, 0],
-        [90, 0, 0, 0],
-        [90, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
+        [15, 735, 2550000000, 0.033, 0.30],
+        [15, 786, 2980000000, 0.052, 0.30],
+        [150, 2340, 11000000000, 0.006, 0.20],
+        [110, 1600, 8901000000, 0.003, 0.20],
+        [1, 6976, 157000000000, 0.033, 0.30],
+        [3, 2900, 85220000000, 0.010, 0.33],
+        [1, 11000, 15300000000, 0.050, 0.44],
+        [1, 8960, 140100000000, 0.010, 0.34],
+        [1.84, 1900, 265000000, 0.030, 0.30],
+        [4, 920, 30000000, 0.010, 0.30],
+        [10, 2200, 70000000000, 0.005, 0.22],
+        [20, 2600, 50000000000, 0.005, 0.22],
+        [8, 1327, 8320000000, 0.028, 0.25],
+        [2.4, 971, 3560000000, 0.058, 0.25],
+        [18, 619, 3060000000, 0.045, 0.30],
+        [18, 686, 3590000000, 0.040, 0.30],
+        [12, 635, 2980000000, 0.038, 0.30],
+        [11.1, 623, 4680000000, 0.030, 0.30],
+        [9, 545, 8230000000, 0.024, 0.30],
+        [12, 488, 5150000000, 0.024, 0.30],
+        [3.8, 1997, 31200000000, 0.012, 0.25],
+        [6, 2522, 66800000000, 0.014, 0.22],
+        [6, 2500, 50720000000, 0.060, 0.22],
+        [50, 40, 0, 0, 0.30],
+        [50, 60, 0, 0, 0.30],
+        [50, 80, 0, 0, 0.30],
+        [60, 0, 0, 0, 0.30],
+        [90, 0, 0, 0, 0.30],
+        [90, 0, 0, 0, 0.30],
+        [0, 0, 0, 0, 0.30],
+        [0, 0, 0, 0, 0.30],
+        [0, 0, 0, 0, 0.30],
     ]
 
     colores = [
@@ -1584,7 +1599,7 @@ def default_materials_dataframe():
     rows = []
 
     for nombre, fila, color in zip(nombres, datos, colores):
-        espesor, densidad, young, eta = fila
+        espesor, densidad, young, eta, poisson = fila
         nlow = nombre.lower()
 
         if "vidrio" in nlow:
@@ -1610,6 +1625,8 @@ def default_materials_dataframe():
             "dens": float(densidad),
             "E": float(young),
             "eta": float(eta),
+            "poisson": float(poisson),
+            "anisotropia": 1.0,
             "color": color,
             "unidad": unidad,
             "precio": float(precios.get(nombre, 0)),
@@ -1635,9 +1652,11 @@ def ensure_materials_file():
     required = default_materials_dataframe().columns.tolist()
     changed = False
 
+    defaults = default_materials_dataframe()
     for col in required:
         if col not in df.columns:
-            df[col] = default_materials_dataframe()[col] if col in default_materials_dataframe().columns else ""
+            default_value = defaults[col].iloc[0] if col in defaults.columns else ""
+            df[col] = default_value
             changed = True
 
     if changed:
@@ -1648,8 +1667,11 @@ def ensure_materials_file():
 
 def material_db():
     """
-    Lee la biblioteca editable data/materiales_sonara.csv.
-    La calculadora usa parámetros acústicos; cubicación/optimizador usan unidad y precio.
+    Une el catálogo acústico principal con la biblioteca editable de SONARA.
+
+    El catálogo normalizado aporta los materiales isótropos aptos para cálculo.
+    La biblioteca editable conserva costos, elementos auxiliares y materiales
+    creados por el usuario; si un nombre coincide, la edición local prevalece.
     """
 
     df = ensure_materials_file()
@@ -1683,6 +1705,8 @@ def material_db():
             "dens": fnum("dens", 0.0),
             "E": fnum("E", 0.0),
             "eta": fnum("eta", 0.0),
+            "poisson": fnum("poisson", 0.30),
+            "anisotropia": fnum("anisotropia", 1.0),
             "color": str(row.get("color", "#9CA3AF")),
             "unidad": str(row.get("unidad", "m²")),
             "precio": fnum("precio", 0.0),
@@ -1690,84 +1714,53 @@ def material_db():
             "activo": row.get("activo", True),
         }
 
+    if catalog_available():
+        for nombre, material in calculation_materials().items():
+            materiales.setdefault(nombre, material)
+
     return materiales
 
 
 
 # =========================================================
-# MOTOR WALLS / AKUZOFT
+# MOTOR PRINCIPAL SONARA-PHYSICS
 # =========================================================
 
 def _integral_walls_tl_from_m_b_eta(m, B, eta, freqs):
-    """Integral angular original WALLS usando m, B y eta."""
-    rho_air = 1.18
-    c = 343.0
-
-    theta = np.linspace(0.0, (4.0 / 9.0) * np.pi, 720)
-    sin_t = np.sin(theta)
-    cos_t = np.cos(theta)
-
-    values = []
-
-    for f in np.asarray(freqs, dtype=float):
-        omega = 2.0 * np.pi * f
-        a = (omega * m * cos_t) / (2.0 * rho_air * c)
-        b = ((omega**2) * B * (sin_t**4)) / (m * c**4)
-
-        denominator = (1.0 + eta * a * b) ** 2 + (a * (1.0 - b)) ** 2
-        integrand = (1.0 / denominator) * cos_t * sin_t
-
-        Q = float(np.trapezoid(integrand, theta))
-        tau = max(Q * 2.0904, 1e-12)
-        values.append(10.0 * np.log10(1.0 / tau))
-
-    return np.asarray(values)
+    """Adaptador histórico hacia la integración del motor principal."""
+    return engine_non_resonant_tl(m, B, eta, freqs)
 
 
 def layer_properties(material, espesor_mm, densidad_override=None):
     h = max(float(espesor_mm) * 1e-3, 1e-6)
     rho = float(densidad_override) if densidad_override else float(material["dens"])
-    E = float(material["E"])
-    eta = float(material["eta"])
-
-    m = rho * h
-    B = E * h**3 / 12.0
-    fc = (343.0**2 / (2.0 * np.pi)) * np.sqrt(m / B)
-    return m, B, eta, fc
+    props = engine_plate_properties(
+        rho,
+        h,
+        float(material["E"]),
+        float(material.get("poisson", 0.30)),
+        float(material.get("eta", 0.0)),
+    )
+    return props.surface_mass, props.bending_stiffness, props.loss_factor, props.critical_frequency
 
 
 def combine_layers(layers):
-    """
-    Combina capas adheridas según la lógica original WALLS:
-    MT = suma(M_i), BT = suma(B_i), NT = suma(eta_i)
-    """
-    masses, rigidities, etas, fcs = [], [], [], []
-
-    for layer in layers:
-        m, B, eta, fc = layer_properties(
-            layer["material"],
-            layer["espesor"],
-            layer.get("densidad")
-        )
-        masses.append(m)
-        rigidities.append(B)
-        etas.append(eta)
-        fcs.append(fc)
-
-    mt = float(np.sum(masses))
-    bt = float(np.sum(rigidities))
-    etat = float(np.sum(etas))
-    fc_min = float(np.min(fcs)) if fcs else 0.0
-    fc_eq = (343.0**2 / (2.0 * np.pi)) * np.sqrt(mt / bt) if bt > 0 else fc_min
-
-    return mt, bt, etat, fc_min, fc_eq
+    """Adaptador de capas adheridas hacia el motor principal."""
+    props = engine_combine_bonded_layers(layers)
+    individual_fc = [layer_properties(x["material"], x["espesor"], x.get("densidad"))[3] for x in layers]
+    return (
+        props.surface_mass,
+        props.bending_stiffness,
+        props.loss_factor,
+        float(np.min(individual_fc)),
+        props.critical_frequency,
+    )
 
 
 def walls_multilayer_tl(layers, freqs):
-    """Panel simple multicapa adherido, equivalente WALLS."""
-    mt, bt, etat, fc_min, fc_eq = combine_layers(layers)
-    tl = _integral_walls_tl_from_m_b_eta(mt, bt, etat, freqs)
-    return tl, mt, bt, etat, fc_eq
+    """Panel simple multicapa calculado por SONARA-PHYSICS."""
+    tl, props = engine_single_leaf_tl(layers, freqs)
+    return tl, props.surface_mass, props.bending_stiffness, props.loss_factor, props.critical_frequency
 
 
 def walls_panel_tl(material, espesor_mm, freqs, densidad_override=None):
@@ -1781,7 +1774,7 @@ def walls_panel_tl(material, espesor_mm, freqs, densidad_override=None):
 
 
 def walls_panel_equivalent_tl(m, B, eta, freqs):
-    return _integral_walls_tl_from_m_b_eta(m, B, eta, freqs)
+    return engine_non_resonant_tl(m, B, eta, freqs)
 
 
 def absorbent_gain(absorbente_tipo):
@@ -1803,64 +1796,17 @@ def walls_double_multilayer_tl(
     absorbente_tipo="Sin absorbente",
     distancia_fijaciones_mm=600.0,
 ):
-    """
-    Panel doble multicapa por lado.
-
-    Configuración estructural en lenguaje de construcción:
-    - Montante simple: unión mecánica más rígida.
-    - Montantes independientes: mayor desacople.
-    - Doble estructura: máximo desacople.
-
-    Base WALLS:
-    f0 = (1/(2*pi))*sqrt(rho_air*c^2)*sqrt((m1+m2)/(m1*m2*d))
-    fl = c/(2*pi*d)
-    """
-    rho_air = 1.18
-    c = 343.0
-    d = max(float(camara_mm) * 1e-3, 1e-4)
-
-    tl1, m1, B1, eta1, fc1 = walls_multilayer_tl(layers_left, freqs)
-    tl2, m2, B2, eta2, fc2 = walls_multilayer_tl(layers_right, freqs)
-
-    mt = m1 + m2
-    bt = B1 + B2
-    etat = eta1 + eta2
-
-    f0 = (1.0 / (2.0 * np.pi)) * np.sqrt(rho_air * c**2) * np.sqrt((m1 + m2) / (m1 * m2 * d))
-    fl = c / (2.0 * np.pi * d)
-
-    tl_low = walls_panel_equivalent_tl(mt, bt, etat, freqs)
-    gain_abs = absorbent_gain(absorbente_tipo)
-
-    # Factores iniciales por configuración constructiva.
-    # Se calibrarán con el r2/r3 original y/o ensayos.
-    config_gain = {
-        "Montante simple": -2.0,
-        "Montantes independientes": 1.5,
-        "Doble estructura": 3.0,
-    }.get(configuracion, 0.0)
-
-    # Efecto de fijaciones más próximas en montante simple.
-    b = max(float(distancia_fijaciones_mm) * 1e-3, 0.1)
-    fijacion_penalty = 0.0
-    if configuracion == "Montante simple":
-        fijacion_penalty = -max(0.0, 600.0 - distancia_fijaciones_mm) / 300.0
-
-    tld = np.zeros_like(np.asarray(freqs, dtype=float))
-
-    for i, f in enumerate(freqs):
-        if f < f0:
-            tld[i] = tl_low[i]
-        elif f < fl:
-            tld[i] = tl1[i] + tl2[i] + 20.0 * np.log10(max(f * d, 1e-12)) - 29.0
-            tld[i] += gain_abs
-        else:
-            tld[i] = tl1[i] + tl2[i] + 6.0
-            tld[i] += gain_abs * 0.35
-
-        tld[i] += config_gain + fijacion_penalty
-
-    return tld, mt, min(fc1, fc2), f0, fl
+    """Panel doble calculado por el solucionador masa-aire-masa principal."""
+    tl, left, right, resonances, fl = engine_double_leaf_tl(
+        layers_left,
+        layers_right,
+        camara_mm,
+        freqs,
+        configuration=configuracion,
+        absorbent=absorbente_tipo,
+        fastener_spacing_mm=distancia_fijaciones_mm,
+    )
+    return tl, left.surface_mass + right.surface_mass, min(left.critical_frequency, right.critical_frequency), float(resonances[0]), fl
 
 
 def walls_double_panel_tl(mat1, esp1_mm, mat2, esp2_mm, camara_mm, freqs, absorbente=True):
@@ -1878,67 +1824,23 @@ def walls_double_panel_tl(mat1, esp1_mm, mat2, esp2_mm, camara_mm, freqs, absorb
 
 
 def walls_window_tl(mat1, esp1_mm, mat2, esp2_mm, camara_mm, freqs):
-    """
-    Motor de ventana / DVH basado en la rama r3 de WALLS.
-
-    WALLS r3:
-    FR = (1/(2*pi))*sqrt(rho_air*c^2)*sqrt((m1+m2)/(m1*m2*CA))
-    F1 = c/(2*CA)
-
-    Si f < FR:
-        TLD = TLA, con TLA = panel equivalente.
-    Si f >= FR:
-        TLB = TL1 + TL2 - 10 + 10log10(CA) + 3.76 + 3
-        TLD = max(TLA, TLB)
-
-    Nota: CA está en metros, tal como en WALLS.
-    """
-
-    rho_air = 1.18
-    c = 343.0
-
-    ca = max(float(camara_mm) * 1e-3, 1e-4)
-
-    tl1, m1, B1, eta1, fc1 = walls_panel_tl(mat1, esp1_mm, freqs)
-    tl2, m2, B2, eta2, fc2 = walls_panel_tl(mat2, esp2_mm, freqs)
-
-    mt = m1 + m2
-    bt = B1 + B2
-    etat = eta1 + eta2
-
-    fr = (
-        (1.0 / (2.0 * np.pi))
-        * np.sqrt(rho_air * c**2)
-        * np.sqrt((m1 + m2) / (m1 * m2 * ca))
+    """DVH calculado por el motor principal masa-aire-masa."""
+    left = [{"material": mat1, "espesor": esp1_mm}]
+    right = [{"material": mat2, "espesor": esp2_mm}]
+    tl, p1, p2, resonances, upper = engine_double_leaf_tl(
+        left,
+        right,
+        camara_mm,
+        freqs,
+        configuration="Montantes independientes",
+        absorbent="Sin absorbente",
+        fastener_spacing_mm=600.0,
     )
-
-    f1 = c / (2.0 * ca)
-
-    tla = walls_panel_equivalent_tl(mt, bt, etat, freqs)
-
-    tld = np.zeros_like(np.asarray(freqs, dtype=float))
-
-    for i, f in enumerate(freqs):
-        if f < fr:
-            tld[i] = tla[i]
-        else:
-            tlb = (
-                tl1[i]
-                + tl2[i]
-                - 10.0
-                + 10.0 * np.log10(ca)
-                + 3.76
-                + 3.0
-            )
-            tld[i] = max(tla[i], tlb)
-
-    return tld, mt, min(fc1, fc2), fr, f1
+    return tl, p1.surface_mass + p2.surface_mass, min(p1.critical_frequency, p2.critical_frequency), float(resonances[0]), upper
 
 
 def dvh_tl(vidrio_ext, esp_ext_mm, vidrio_int, esp_int_mm, camara_mm, freqs):
-    """
-    Compatibilidad: DVH usa el motor de ventana r3 de WALLS.
-    """
+    """Compatibilidad de interfaz para el cálculo DVH SONARA-PHYSICS."""
     return walls_window_tl(
         vidrio_ext,
         esp_ext_mm,
@@ -2138,7 +2040,7 @@ def structural_visual(
     elif tipo == "Ventana":
         nota = f"Tipo de ventana: {tipo_ventana}."
     else:
-        nota = "Panel simple multicapa: capas adheridas calculadas como elemento equivalente WALLS."
+        nota = "Panel simple multicapa: capas adheridas calculadas como elemento equivalente SONARA-PHYSICS."
 
     html += f"<div class='result-note'>{nota}</div>"
     html += "</div>"
@@ -2647,6 +2549,11 @@ def app_calculator():
             f"<div class='result-note'>{diagnostic_note(tipo, rw, c, ctr, fc, masa)}<br><b>Descriptor seleccionado:</b> {descriptor_name} = {descriptor_value:.1f} dB.</div>",
             unsafe_allow_html=True,
         )
+        if tipo == "Panel doble" or (tipo == "Ventana" and tipo_ventana == "DVH"):
+            st.caption(
+                f"Resonancias del modelo: masa–aire–masa f₀ = {f0:.0f} Hz · "
+                f"límite de cámara fₗ = {fl:.0f} Hz. Revise especialmente las bandas próximas."
+            )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -2661,7 +2568,7 @@ def app_calculator():
                 x=freqs,
                 y=np.round(tl, 1),
                 mode="lines+markers",
-                name="TL/R WALLS",
+                name=f"TL/R {ENGINE_ID}",
                 line=dict(width=3),
                 marker=dict(size=7),
             )
@@ -2802,6 +2709,82 @@ def app_calculator():
             "tipo_ventana": tipo_ventana,
         }, key_prefix="save_airborne")
 
+    with st.expander("Validar predicción con ensayo de laboratorio o medición", expanded=False):
+        st.caption(
+            "Suba un CSV con dos columnas: frecuencia en Hz y R medido en dB. "
+            "SONARA alinea las bandas, calcula errores y compara Rw; no determina cumplimiento."
+        )
+        template = pd.DataFrame({
+            "frecuencia_hz": third_freqs.astype(int),
+            "r_medido_db": np.round(tl_third, 1),
+        })
+        st.download_button(
+            "⬇ Descargar plantilla de ensayo",
+            template.to_csv(index=False).encode("utf-8"),
+            "plantilla_ensayo_sonara.csv",
+            "text/csv",
+            key="airborne_validation_template",
+        )
+        measured_file = st.file_uploader(
+            "CSV del ensayo",
+            type=["csv"],
+            key="airborne_measured_csv",
+        )
+        if measured_file is not None:
+            try:
+                measured_df = pd.read_csv(measured_file, sep=None, engine="python")
+                if measured_df.shape[1] < 2:
+                    raise ValueError("El archivo necesita al menos dos columnas.")
+                measured_freq = pd.to_numeric(measured_df.iloc[:, 0], errors="raise").to_numpy()
+                measured_r = pd.to_numeric(measured_df.iloc[:, 1], errors="raise").to_numpy()
+                validation = compare_predicted_measured(
+                    third_freqs, tl_third, measured_freq, measured_r
+                )
+                metrics = st.columns(5)
+                metrics[0].metric("Sesgo pred.–med.", f"{validation['bias']:+.1f} dB")
+                metrics[1].metric("Error medio |e|", f"{validation['mae']:.1f} dB")
+                metrics[2].metric("RMSE", f"{validation['rmse']:.1f} dB")
+                metrics[3].metric(
+                    "Rw medido",
+                    "—" if validation["measured_rw"] is None else f"{validation['measured_rw']} dB",
+                )
+                metrics[4].metric(
+                    "ΔRw pred.–med.",
+                    "—" if validation["delta_rw"] is None else f"{validation['delta_rw']:+d} dB",
+                )
+                validation_df = pd.DataFrame({
+                    "Frecuencia [Hz]": validation["freqs"].astype(int),
+                    "R predicho [dB]": np.round(validation["predicted"], 1),
+                    "R medido [dB]": np.round(validation["measured"], 1),
+                    "Error pred.-med. [dB]": np.round(validation["residual"], 1),
+                })
+                comparison = go.Figure()
+                comparison.add_trace(go.Scatter(
+                    x=validation["freqs"], y=validation["predicted"],
+                    mode="lines+markers", name="Predicción SONARA"
+                ))
+                comparison.add_trace(go.Scatter(
+                    x=validation["freqs"], y=validation["measured"],
+                    mode="lines+markers", name="Ensayo / medición"
+                ))
+                comparison.update_xaxes(type="log", title="Frecuencia [Hz]")
+                comparison.update_yaxes(title="R [dB]")
+                comparison.update_layout(
+                    template="plotly_dark", height=390,
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)",
+                )
+                st.plotly_chart(comparison, use_container_width=True)
+                st.dataframe(validation_df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇ Descargar informe de validación",
+                    validation_df.to_csv(index=False).encode("utf-8"),
+                    "validacion_prediccion_sonara.csv",
+                    "text/csv",
+                    key="airborne_validation_download",
+                )
+            except Exception as exc:
+                st.error(f"No se pudo validar el archivo: {exc}")
+
 
 
 
@@ -2811,7 +2794,7 @@ def app_calculator():
 
 def _iso_reference_curve_from_rw(rw):
     """
-    Curva de referencia con la misma forma usada en el cálculo WALLS/ISO 717.
+    Curva de referencia con la misma forma usada en el cálculo SONARA-PHYSICS/ISO 717.
     Se desplaza para que su valor a 500 Hz sea igual al Rw ingresado.
     """
     freqs = np.array([
@@ -2833,7 +2816,7 @@ def _iso12354_apparent_curve(freqs, r_direct, s_sep, flanks):
     Estimación ISO 12354 simplificada por bandas.
 
     Mejora v0.9.9:
-    - Si un flanco trae r_curve, se usa su curva R(f) calculada por WALLS.
+    - Si un flanco trae r_curve, se usa su curva R(f) calculada por SONARA-PHYSICS.
     - Si no trae r_curve, se genera una curva de referencia desde Rw.
     - Kij se aplica por bandas como corrección energética simplificada.
     """
@@ -2908,7 +2891,7 @@ def app_iso12354():
         """
         <div class='result-note'>
         Módulo para estimar aislamiento acústico aéreo entre dos recintos. Permite ingresar los flancos manualmente
-        o calcular su Rw usando el motor SONARA/WALLS. El esquema muestra solo los caminos de transmisión activados.
+        o calcular su Rw usando el motor SONARA-PHYSICS. El esquema muestra solo los caminos de transmisión activados.
         </div>
         """,
         unsafe_allow_html=True
@@ -3078,7 +3061,7 @@ def app_iso12354():
 
                     modo_r = st.radio(
                         "R del flanco",
-                        ["Manual", "Calcular con SONARA/WALLS"],
+                        ["Manual", "Calcular con SONARA-PHYSICS"],
                         horizontal=True,
                         key=f"iso12354_modo_r_{i}"
                     )
@@ -3190,7 +3173,7 @@ def app_iso12354():
         with st.expander("¿Cómo se estima R del flanqueo?"):
             st.markdown(
                 """
-                Puede ingresarse manualmente desde ensayos/fichas técnicas o calcularse con SONARA/WALLS.
+                Puede ingresarse manualmente desde ensayos/fichas técnicas o calcularse con SONARA-PHYSICS.
                 Si lo calculas con SONARA, el software usa las capas del flanco y obtiene su Rw automáticamente.
                 """
             )
@@ -3490,7 +3473,7 @@ def app_iso12354():
                     <li><b>Hoeller, Parzinger & Schanda (2025)</b> — Discussion and proposed changes to Annex B of ISO 12354-1 for homogeneous building elements.</li>
                 </ul>
                 <div class='result-note' style='margin-top:14px;'>
-                    SONARA usa WALLS para elementos constructivos e ISO 12354-1 como base conceptual para recintos.
+                    SONARA usa SONARA-PHYSICS para elementos constructivos e ISO 12354-1 como base conceptual para recintos.
                     Las referencias deben revisarse frente a normas oficiales vigentes antes de uso contractual, certificación o informe formal.
                 </div>
             </div>
@@ -3547,7 +3530,7 @@ def app_biblioteca():
             <div class='sonara-card'>
                 <div class='sonara-card-title'>Uso dentro de SONARA</div>
                 <ul style='color:#DCEBFF;line-height:1.8;'>
-                    <li><b>WALLS:</b> cálculo de R(f), Rw, C y Ctr de elementos constructivos.</li>
+                    <li><b>SONARA-PHYSICS:</b> cálculo físico de R(f), Rw, C y Ctr de elementos constructivos.</li>
                     <li><b>ISO 717-1:</b> clasificación ponderada de curvas de aislamiento.</li>
                     <li><b>ISO 12354-1:</b> estimación entre recintos, transmisión directa, flanqueos y corrección de uniones Kij.</li>
                     <li><b>ISO 10140-2:</b> comparación con ensayos de laboratorio.</li>
@@ -4316,7 +4299,7 @@ def estimate_cubicacion_tabique(
 def build_candidate_systems(mats, objetivo_rw, max_espesor, max_masa, area, prioridad):
     """
     Generador inicial de alternativas.
-    Prueba combinaciones típicas de tabiques livianos con WALLS.
+    Prueba combinaciones típicas de tabiques livianos con SONARA-PHYSICS.
     """
     paneles = [
         k for k, v in mats.items()
@@ -5064,7 +5047,7 @@ def sonara_cached_score_variant(signature, variant_payload):
 def sonara_estimate_mass_law_rw(masa_kg_m2):
     """
     Filtro rápido preliminar por ley de masa aproximada.
-    No reemplaza WALLS; sirve para ordenar candidatos antes del cálculo preciso.
+    Sirve para ordenar candidatos antes del cálculo físico completo.
     """
     try:
         m = max(float(masa_kg_m2), 1.0)
@@ -5469,7 +5452,7 @@ def sonara_generate_progressive_variants(base_solution=None, target_rw=45, max_e
 
 def sonara_precise_score_variant(variant):
     """
-    Cálculo WALLS preciso solo para candidatas prefiltradas.
+    Cálculo SONARA-PHYSICS solo para candidatas prefiltradas.
     No devuelve Rw=0 silencioso salvo que realmente no existan capas.
     """
     freqs_fine = np.linspace(50, 5000, 700)
@@ -6007,7 +5990,7 @@ def app_optimizador():
     """
     st.markdown("## Optimizador IA")
     st.markdown(
-        "<div class='result-note'>Optimización contextual: SONARA parte desde la solución y requerimiento seleccionados, prueba mejoras progresivas y calcula WALLS solo en las mejores candidatas.</div>",
+        "<div class='result-note'>Optimización contextual: SONARA parte desde la solución y requerimiento seleccionados, prueba mejoras progresivas y calcula SONARA-PHYSICS solo en las mejores candidatas.</div>",
         unsafe_allow_html=True
     )
 
@@ -6094,7 +6077,7 @@ def app_optimizador():
                     <li>Luego agrega una capa adicional si no alcanza.</li>
                     <li>Después evalúa cámara con absorbente.</li>
                     <li>Finalmente prueba desacople estructural.</li>
-                    <li>Calcula WALLS solo sobre candidatas filtradas para reducir tiempo.</li>
+                    <li>Calcula SONARA-PHYSICS solo sobre candidatas filtradas para reducir tiempo.</li>
                 </ul>
             </div>
             """,
@@ -6249,18 +6232,46 @@ def app_materiales():
     st.markdown(
         """
         <div class='result-note'>
-        Biblioteca editable de materiales SONARA. Aquí se guardan los parámetros acústicos del motor WALLS
-        y los costos usados por Cubicación y Optimizador IA.
+        Catálogo acústico principal y biblioteca editable de SONARA. Aquí se consultan los materiales del
+        motor SONARA-PHYSICS y se mantienen los costos usados por Cubicación y Optimizador IA.
         </div>
         """,
         unsafe_allow_html=True
     )
 
+    if catalog_available():
+        summary = catalog_summary()
+        total_catalog = int(summary["records"].sum()) if not summary.empty else 0
+        calculation_count = len(calculation_materials())
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Registros del catálogo", f"{total_catalog:,}".replace(",", "."))
+        s2.metric("Materiales calculables", f"{calculation_count:,}".replace(",", "."))
+        s3.metric("Motor principal", ENGINE_ID)
+
+        with st.expander("Explorar catálogo acústico completo", expanded=False):
+            datasets = ["Todos"] + summary["dataset"].astype(str).tolist()
+            f1, f2, f3 = st.columns([0.8, 1.4, 0.7])
+            dataset_filter = f1.selectbox("Familia", datasets, key="catalog_dataset")
+            text_filter = f2.text_input("Buscar nombre, fabricante o modelo", key="catalog_search")
+            chile_filter = f3.checkbox("Disponible en Chile", value=False, key="catalog_chile")
+            catalog_frame = browse_catalog(
+                dataset=dataset_filter,
+                search=text_filter,
+                chile_only=chile_filter,
+                limit=2000,
+            )
+            st.dataframe(catalog_frame, use_container_width=True, hide_index=True, height=430)
+            st.caption(
+                "El catálogo conserva materiales, vidrios, absorbentes, núcleos, perfiles, "
+                "montantes, conexiones y revestimientos de piso. Solo los materiales isótropos "
+                "con propiedades completas entran directamente al cálculo de placas."
+            )
+
     ensure_materials_file()
     df = pd.read_csv(MATERIALS_CSV)
 
     cols_order = [
-        "nombre", "tipo", "grupo", "espesor", "dens", "E", "eta",
+        "nombre", "tipo", "grupo", "espesor", "dens", "E", "eta", "poisson", "anisotropia",
         "color", "unidad", "precio", "proveedor", "activo"
     ]
 
@@ -6287,14 +6298,14 @@ def app_materiales():
         )
 
     with col_actions3:
-        if st.button("♻ Restaurar base WALLS", use_container_width=True):
+        if st.button("♻ Restaurar materiales editables", use_container_width=True):
             default_materials_dataframe().to_csv(MATERIALS_CSV, index=False, encoding="utf-8")
-            st.success("Base WALLS restaurada. Recarga el módulo para ver los cambios.")
+            st.success("Materiales editables restaurados. El catálogo acústico principal no se modificó.")
 
     uploaded = st.file_uploader(
         "Importar biblioteca CSV",
         type=["csv"],
-        help="Debe contener columnas: nombre,tipo,grupo,espesor,dens,E,eta,color,unidad,precio,proveedor,activo"
+        help="Debe contener nombre, tipo, grupo y propiedades físicas. Poisson y anisotropía son opcionales."
     )
 
     if uploaded is not None:
@@ -6339,6 +6350,8 @@ def app_materiales():
             "dens": st.column_config.NumberColumn("Densidad [kg/m³]", min_value=0.0, step=1.0),
             "E": st.column_config.NumberColumn("Módulo Young E [Pa]", min_value=0.0, step=1000000.0),
             "eta": st.column_config.NumberColumn("η amortiguamiento", min_value=0.0, step=0.001, format="%.4f"),
+            "poisson": st.column_config.NumberColumn("Poisson ν", min_value=0.0, max_value=0.49, step=0.01, format="%.2f"),
+            "anisotropia": st.column_config.NumberColumn("Razón anisotrópica", min_value=0.01, step=0.05, format="%.2f"),
             "color": st.column_config.TextColumn("Color HEX"),
             "unidad": st.column_config.SelectboxColumn("Unidad", options=["m²", "ml", "un", "kg", "m³"]),
             "precio": st.column_config.NumberColumn("Precio unitario [$]", min_value=0.0, step=100.0),
@@ -6390,7 +6403,7 @@ def app_materiales():
         """
         <div class='result-note' style='margin-top:18px;'>
         Recomendación: usa precios reales de tus proveedores y actualiza esta biblioteca antes de ejecutar cubicaciones u optimizaciones.
-        Los parámetros densidad, E y η afectan directamente los cálculos WALLS.
+        Los parámetros densidad, E, ν y η afectan directamente los cálculos SONARA-PHYSICS.
         </div>
         """,
         unsafe_allow_html=True
@@ -6735,7 +6748,7 @@ def app_loscaa_validation():
     st.markdown(
         """
         <div class='result-note'>
-        Validación cuantitativa preliminar entre fichas LOSCAA MINVU ED13 2024 y el motor SONARA/WALLS.
+        Validación cuantitativa preliminar entre fichas LOSCAA MINVU ED13 2024 y el motor SONARA-PHYSICS.
         La comparación usa los casos actualmente modelados en SONARA; no reemplaza ensayos de laboratorio ni certificaciones.
         </div>
         """,

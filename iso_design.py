@@ -57,6 +57,67 @@ def transmission_average_db(values):
     return -10.0 * np.log10(np.maximum(np.mean(10.0 ** (-arr / 10.0)), 1e-30))
 
 
+def compare_predicted_measured(predicted_freqs, predicted_values, measured_freqs, measured_values):
+    """Compare an airborne-insulation prediction with a measured spectrum.
+
+    Measured points are retained only inside the predicted frequency range and
+    the prediction is interpolated on those exact bands.  The function reports
+    signed bias (prediction minus measurement), MAE and RMSE, plus the ISO
+    717-1 single-number ratings when the measured data cover 100--3150 Hz.
+    It intentionally does not decide compliance or assign a building class.
+    """
+    pf = np.asarray(predicted_freqs, dtype=float)
+    pv = np.asarray(predicted_values, dtype=float)
+    mf = np.asarray(measured_freqs, dtype=float)
+    mv = np.asarray(measured_values, dtype=float)
+
+    if pf.size != pv.size or mf.size != mv.size:
+        raise ValueError("Frecuencias y valores deben tener la misma cantidad de datos.")
+    if pf.size < 2 or mf.size < 1:
+        raise ValueError("Se requieren al menos dos puntos predichos y un punto medido.")
+    if not (np.all(np.isfinite(pf)) and np.all(np.isfinite(pv)) and
+            np.all(np.isfinite(mf)) and np.all(np.isfinite(mv))):
+        raise ValueError("Los datos de validación deben ser numéricos y finitos.")
+
+    order_p = np.argsort(pf)
+    order_m = np.argsort(mf)
+    pf, pv = pf[order_p], pv[order_p]
+    mf, mv = mf[order_m], mv[order_m]
+    if np.any(np.diff(pf) <= 0) or np.any(np.diff(mf) <= 0):
+        raise ValueError("Las frecuencias no pueden repetirse.")
+
+    overlap = (mf >= pf[0]) & (mf <= pf[-1])
+    if not np.any(overlap):
+        raise ValueError("El ensayo y la predicción no comparten bandas de frecuencia.")
+    mf, mv = mf[overlap], mv[overlap]
+    aligned = np.interp(mf, pf, pv)
+    residual = aligned - mv
+
+    result = {
+        "freqs": mf,
+        "predicted": aligned,
+        "measured": mv,
+        "residual": residual,
+        "bias": float(np.mean(residual)),
+        "mae": float(np.mean(np.abs(residual))),
+        "rmse": float(np.sqrt(np.mean(residual ** 2))),
+        "max_abs_error": float(np.max(np.abs(residual))),
+        "predicted_rw": None,
+        "measured_rw": None,
+        "delta_rw": None,
+    }
+    required = THIRD_OCTAVE_100_3150
+    if mf[0] <= required[0] and mf[-1] >= required[-1]:
+        predicted_rw, _, _ = airborne_rating(mf, aligned)
+        measured_rw, _, _ = airborne_rating(mf, mv)
+        result.update({
+            "predicted_rw": predicted_rw,
+            "measured_rw": measured_rw,
+            "delta_rw": predicted_rw - measured_rw,
+        })
+    return result
+
+
 def airborne_rating(freqs, values):
     """Return the ISO 717-1 weighted value and the shifted reference curve."""
     f = np.asarray(freqs, dtype=float)

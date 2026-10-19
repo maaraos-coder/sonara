@@ -2,8 +2,13 @@
 
 ## Estructura
 - `app.py`: aplicación principal.
+- `sonara_engine.py`: motor físico principal para placas y sistemas masa-aire-masa.
+- `material_catalog.py`: acceso al catálogo acústico normalizado.
 - `iso_design.py`: motor verificable de descriptores acústicos de proyecto.
-- `tests/test_iso_design.py`: pruebas unitarias del motor acústico.
+- `data/acoustic_catalog.sqlite.xz.part-*`: catálogo completo de 3.646 registros,
+  comprimido y reconstruido automáticamente al iniciar.
+- `data/acoustic_materials.csv`: propiedades auditadas de materiales y vidrios.
+- `tests/`: pruebas unitarias del motor, catálogo, descriptores y acceso Academy.
 - `requirements.txt`: dependencias Python.
 - `Dockerfile`: contenedor para despliegue comercial.
 - `render.yaml`: blueprint para Render.
@@ -22,6 +27,11 @@ La calculadora entrega valores proyectados de aislamiento aéreo, impacto,
 fachada, ruido de instalaciones y reverberación. No asigna automáticamente
 clases ISO/TS 19488:2021; la consulta de las tablas, clasificación y
 justificación corresponden al estudiante.
+
+`SONARA-PHYSICS-1` es el motor principal de ruido aéreo. Calcula propiedades
+de placa isótropa, caminos resonante/no resonante y sistemas masa-aire-masa;
+ISO 717 e ISO 12354 consumen las curvas obtenidas. Hasta completar el banco de
+comparación, los resultados conservan carácter de proyecto y docencia.
 
 Ejecutar las pruebas del motor con:
 
