@@ -64,6 +64,11 @@ alumnos eligen su propia contraseña de SONARA; el RUT no se copia ni se usa
 como contraseña. Una cuenta trial previa se convierte automáticamente en
 Academy al volver a ingresar con el correo autorizado.
 
+Las credenciales hash, el perfil y el tipo de licencia se guardan en la tabla
+privada `sonara_accounts`, con RLS habilitado y sin permisos para `anon` ni
+`authenticated`. Esto mantiene las cuentas entre reinicios aunque Render use
+el plan gratuito. El SQL reproducible está en `supabase/sonara_accounts.sql`.
+
 ## Dominio .cl
 En Render:
 - Settings > Custom Domains.
