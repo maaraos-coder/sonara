@@ -10,6 +10,7 @@ import json
 import hashlib
 import secrets
 
+from academy_access import academy_student_by_email
 from iso_design import (
     OCTAVE_EQUIPMENT,
     airborne_single_numbers,
@@ -887,6 +888,8 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
     if exists:
         return False, "Ese correo ya está registrado."
 
+    academy_student = academy_student_by_email(email)
+    is_academy = academy_student is not None
     end = now + timedelta(days=TRIAL_DAYS)
     pw_hash, salt = hash_password(password)
 
@@ -894,18 +897,20 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
         "email": email,
         "password_hash": pw_hash,
         "salt": salt,
-        "nombre": nombre or email,
-        "empresa": empresa,
-        "cargo": cargo,
+        "nombre": (academy_student or {}).get("display_name") or nombre or email,
+        "empresa": empresa or ("Diplomado en Acústica en la Edificación" if is_academy else ""),
+        "cargo": cargo or ("Alumno" if is_academy else ""),
         "first_login": now.isoformat(timespec="seconds"),
         "last_login": now.isoformat(timespec="seconds"),
-        "license_type": "trial",
+        "license_type": "academy" if is_academy else "trial",
         "estado": "active",
-        "trial_start": now.isoformat(timespec="seconds"),
-        "trial_end": end.isoformat(timespec="seconds"),
+        "trial_start": "" if is_academy else now.isoformat(timespec="seconds"),
+        "trial_end": "" if is_academy else end.isoformat(timespec="seconds"),
     }])
 
     pd.concat([users, new_user], ignore_index=True).to_csv(USERS_CSV, index=False)
+    if is_academy:
+        return True, "Cuenta Academy del Diplomado creada con acceso indefinido."
     return True, "Usuario creado correctamente."
 
 
@@ -1019,6 +1024,42 @@ def get_license(email):
                 "expires": str(row.get("vigencia", "2099-12-31")),
                 "name": row.get("nombre", email)
             }
+
+    # Una cuenta Academy ya reconocida conserva su acceso aunque Supabase esté
+    # temporalmente fuera de servicio. No se almacenan RUT ni credenciales del
+    # laboratorio en SONARA.
+    local_match = pd.DataFrame()
+    if not users.empty and "email" in users.columns:
+        local_match = users[users["email"].astype(str).str.lower() == email]
+    if len(local_match) and str(local_match.iloc[0].get("license_type", "")).lower() == "academy":
+        return {
+            "allowed": True,
+            "type": "academy",
+            "days_left": None,
+            "expires": "indefinida",
+            "name": local_match.iloc[0].get("nombre", email)
+        }
+
+    # Nómina viva del Diplomado. También convierte automáticamente una cuenta
+    # trial previa en Academy cuando el correo coincide con un alumno activo.
+    academy_student = academy_student_by_email(email)
+    if academy_student is not None:
+        if len(local_match):
+            idx = local_match.index[0]
+            users.loc[idx, "license_type"] = "academy"
+            users.loc[idx, "estado"] = "active"
+            users.loc[idx, "trial_start"] = ""
+            users.loc[idx, "trial_end"] = ""
+            if academy_student.get("display_name"):
+                users.loc[idx, "nombre"] = academy_student["display_name"]
+            users.to_csv(USERS_CSV, index=False)
+        return {
+            "allowed": True,
+            "type": "academy",
+            "days_left": None,
+            "expires": "indefinida",
+            "name": academy_student.get("display_name") or email,
+        }
 
     if not premium.empty and "email" in premium.columns:
         match = premium[premium["email"].astype(str).str.lower() == email]
@@ -1245,7 +1286,8 @@ def login_page():
             cargo = st.text_input("Cargo", key="reg_cargo")
             password2 = st.text_input("Repetir contraseña", type="password", key="auth_password2")
 
-            if st.button("Crear cuenta trial", use_container_width=True):
+            st.caption("Si tu correo está en la nómina activa del Diplomado, la cuenta se habilitará como Academy indefinida.")
+            if st.button("Crear cuenta", use_container_width=True):
                 e = norm(email)
                 if not e or "@" not in e:
                     st.error("Ingresa un correo válido.")
@@ -1258,7 +1300,7 @@ def login_page():
                     if ok:
                         st.session_state.email = e
                         st.session_state.license_info = get_license(e)
-                        st.success("Cuenta creada. Accediendo...")
+                        st.success(f"{msg} Accediendo...")
                         st.rerun()
                     else:
                         st.error(msg)

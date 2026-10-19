@@ -50,6 +50,20 @@ http://localhost:8501
 7. Elegir Docker.
 8. Deploy.
 
+### Acceso Academy del Diplomado
+
+SONARA reconoce como `academy` indefinida toda cuenta creada con un correo
+activo en `authorized_students` del Supabase del Diplomado. Configure en Render
+estas variables privadas:
+
+- `SONARA_ACADEMY_SUPABASE_URL`
+- `SONARA_ACADEMY_SUPABASE_SERVICE_ROLE_KEY`
+
+La clave debe ser `service_role`/`secret`, nunca `anon` ni `publishable`. Los
+alumnos eligen su propia contraseña de SONARA; el RUT no se copia ni se usa
+como contraseña. Una cuenta trial previa se convierte automáticamente en
+Academy al volver a ingresar con el correo autorizado.
+
 ## Dominio .cl
 En Render:
 - Settings > Custom Domains.
