@@ -78,3 +78,67 @@ def academy_student_by_email(email: str):
 
 def academy_bridge_configured() -> bool:
     return academy_supabase_client() is not None
+
+
+def sonara_account_by_email(email: str):
+    """Return one private SONARA account through the server-side client."""
+    normalized = str(email or "").strip().lower()
+    if not normalized or "@" not in normalized or len(normalized) > 254:
+        return None
+    client = academy_supabase_client()
+    if client is None:
+        return None
+    try:
+        rows = (
+            client.table("sonara_accounts")
+            .select(
+                "email,password_hash,salt,nombre,empresa,cargo,first_login,"
+                "last_login,license_type,estado,trial_start,trial_end"
+            )
+            .eq("email", normalized)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+def create_sonara_account(account: dict) -> bool:
+    """Persist a new SONARA account. The table is inaccessible to public roles."""
+    client = academy_supabase_client()
+    if client is None:
+        return False
+    payload = dict(account or {})
+    payload["email"] = str(payload.get("email", "")).strip().lower()
+    if not payload["email"]:
+        return False
+    try:
+        client.table("sonara_accounts").insert(payload).execute()
+        return True
+    except Exception:
+        return False
+
+
+def update_sonara_account(email: str, changes: dict) -> bool:
+    """Update one SONARA account without ever exposing the service key."""
+    normalized = str(email or "").strip().lower()
+    if not normalized or not changes:
+        return False
+    client = academy_supabase_client()
+    if client is None:
+        return False
+    allowed = {
+        "password_hash", "salt", "nombre", "empresa", "cargo", "last_login",
+        "license_type", "estado", "trial_start", "trial_end", "updated_at",
+    }
+    payload = {key: value for key, value in changes.items() if key in allowed}
+    if not payload:
+        return False
+    try:
+        client.table("sonara_accounts").update(payload).eq("email", normalized).execute()
+        return True
+    except Exception:
+        return False
