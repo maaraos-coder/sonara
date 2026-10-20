@@ -1718,7 +1718,7 @@ def login_page():
         p2.markdown("""
         <div class='plan academy'>
             <div class='plan-title academy'>INSTITUCIONAL</div>
-            <div class='plan-price'>Docencia</div>
+            <div class='plan-price'>Organizaciones</div>
             <div class='plan-text'>Licencias para organizaciones, equipos y programas profesionales.</div>
         </div>
         """, unsafe_allow_html=True)
@@ -4546,7 +4546,7 @@ def app_impacto():
                 <li><b>Modelo físico:</b> piso flotante como sistema masa-resorte-masa mediante f0 = 1/(2π)√(s'/m').</li>
             </ul>
             <div class='result-note' style='margin-top:14px;'>
-                Esta implementación es Nivel 1–2/ISO preliminar: útil para diseño preliminar y docencia.
+                Esta implementación es Nivel 1–2/ISO preliminar y está orientada al diseño de proyecto.
                 Para certificación o informe formal se requiere validar con datos de ensayo y norma completa.
             </div>
         </div>
@@ -8545,7 +8545,7 @@ def norm_target_rows():
 
         # HVAC
         {"sector":"HVAC", "norma":"ASHRAE / CIBSE B5", "elemento":"Diseño HVAC general", "indicador":"NC/NR", "sentido":"<=", "valor":35, "unidad":"NC/NR", "fuente":"ASHRAE HVAC Applications / CIBSE B5"},
-        {"sector":"HVAC", "norma":"ASHRAE / CIBSE B5", "elemento":"Espacio crítico / reunión / docencia", "indicador":"NC/NR", "sentido":"<=", "valor":30, "unidad":"NC/NR", "fuente":"ASHRAE HVAC Applications / CIBSE B5"},
+        {"sector":"HVAC", "norma":"ASHRAE / CIBSE B5", "elemento":"Espacio crítico / sala de reunión / aula", "indicador":"NC/NR", "sentido":"<=", "valor":30, "unidad":"NC/NR", "fuente":"ASHRAE HVAC Applications / CIBSE B5"},
     ]
 
 
