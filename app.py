@@ -85,6 +85,82 @@ TRIAL_DAYS = 3
 SONARA_LOGO_B64 = ""
 
 
+def style_acoustic_spectrum(fig, frequencies, *, height=None):
+    """Aplica una escala espectral legible y consistente a los gráficos acústicos."""
+    frequency_values = np.asarray(frequencies, dtype=float)
+    frequency_values = frequency_values[np.isfinite(frequency_values) & (frequency_values > 0)]
+    if frequency_values.size == 0:
+        return fig
+
+    low = float(np.min(frequency_values))
+    high = float(np.max(frequency_values))
+    standard_ticks = np.asarray(
+        [31.5, 50, 63, 80, 100, 125, 250, 500, 1000, 2000, 3150, 4000, 8000, 16000],
+        dtype=float,
+    )
+    tick_values = standard_ticks[(standard_ticks >= low) & (standard_ticks <= high)]
+    if tick_values.size < 2:
+        tick_values = np.unique(frequency_values)
+
+    def frequency_label(value):
+        return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+    xaxis_style = dict(
+        type="log",
+        title="Frecuencia [Hz]",
+        tickmode="array",
+        tickvals=tick_values.tolist(),
+        ticktext=[frequency_label(value) for value in tick_values],
+        gridcolor="rgba(194, 220, 245, .18)",
+        zeroline=False,
+        showline=True,
+        linecolor="rgba(234, 244, 255, .50)",
+        ticks="outside",
+        tickcolor="rgba(234, 244, 255, .65)",
+        tickfont=dict(size=13, color="#EAF4FF"),
+        title_font=dict(size=15, color="#EAF4FF"),
+        automargin=True,
+    )
+    # Plotly 6+ agrega dígitos sueltos (2, 3, 4…) a los ejes logarítmicos.
+    # Se desactivan cuando la versión instalada ofrece esa propiedad.
+    if "minorloglabels" in go.layout.XAxis()._valid_props:
+        xaxis_style["minorloglabels"] = "none"
+    fig.update_xaxes(**xaxis_style)
+    fig.update_yaxes(
+        gridcolor="rgba(194, 220, 245, .18)",
+        zeroline=False,
+        showline=True,
+        linecolor="rgba(234, 244, 255, .50)",
+        ticks="outside",
+        tickcolor="rgba(234, 244, 255, .65)",
+        tickfont=dict(size=13, color="#EAF4FF"),
+        title_font=dict(size=15, color="#EAF4FF"),
+        automargin=True,
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        height=height or fig.layout.height or 440,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(8,18,32,.92)",
+        font=dict(size=14, color="#EAF4FF"),
+        margin=dict(l=72, r=24, t=96, b=72),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#10233A", bordercolor="#2E9BFF", font=dict(color="#FFFFFF", size=13)),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.04,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=13, color="#FFFFFF"),
+            bgcolor="rgba(8,18,32,.86)",
+            bordercolor="rgba(124,190,255,.30)",
+            borderwidth=1,
+        ),
+    )
+    return fig
+
+
 def bootstrap_sonara_assets():
     """
     Genera assets livianos de SONARA sin incrustar imágenes gigantes en app.py.
@@ -2790,6 +2866,7 @@ def app_calculator():
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=14, color="#FFFFFF")),
         )
 
+        style_acoustic_spectrum(fig, freqs, height=490)
         st.plotly_chart(fig, use_container_width=True)
 
     with col_table:
@@ -2947,6 +3024,7 @@ def app_calculator():
                     template="plotly_dark", height=390,
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)",
                 )
+                style_acoustic_spectrum(comparison, validation["freqs"], height=430)
                 st.plotly_chart(comparison, use_container_width=True)
                 st.dataframe(validation_df, use_container_width=True, hide_index=True)
                 st.download_button(
@@ -3520,6 +3598,7 @@ def app_iso12354():
             )
         )
 
+        style_acoustic_spectrum(fig, freqs, height=540)
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(
@@ -4272,6 +4351,7 @@ def app_impacto():
             )
         )
 
+        style_acoustic_spectrum(fig, freqs, height=540)
         st.plotly_chart(fig, use_container_width=True)
 
     with col_table:
@@ -7037,6 +7117,7 @@ def app_loscaa_validation():
                 )
                 fig.update_xaxes(gridcolor="rgba(255,255,255,.10)")
                 fig.update_yaxes(gridcolor="rgba(255,255,255,.10)")
+                style_acoustic_spectrum(fig, freqs, height=430)
                 st.plotly_chart(fig, use_container_width=True)
             st.markdown(
                 """
@@ -7138,6 +7219,7 @@ def app_loscaa_validation():
                 fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=[100,125,250,500,1000,2000,3150], ticktext=["100","125","250","500","1000","2000","3150"], gridcolor="rgba(255,255,255,.10)")
                 fig.update_yaxes(title=f"{main_label} / curva [dB]", gridcolor="rgba(255,255,255,.10)")
                 fig.update_layout(template="plotly_dark", height=430, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)", font=dict(size=15, color="#EAF4FF"), margin=dict(l=60, r=20, t=60, b=60), legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5))
+                style_acoustic_spectrum(fig, freqs, height=430)
                 st.plotly_chart(fig, use_container_width=True)
 
     with tab_biblioteca:
@@ -7361,6 +7443,7 @@ def app_fachada_iso():
     fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=[100, 125, 250, 500, 1000, 2000, 3150])
     fig.update_yaxes(title="R [dB]")
     fig.update_layout(template="plotly_dark", height=430, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    style_acoustic_spectrum(fig, result["freqs"], height=460)
     st.plotly_chart(fig, use_container_width=True)
 
     df = pd.DataFrame(component_rows)
@@ -7532,6 +7615,7 @@ def app_instalaciones_iso():
     fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=OCTAVE_EQUIPMENT)
     fig.update_yaxes(title="Nivel [dB]")
     fig.update_layout(template="plotly_dark", height=370, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    style_acoustic_spectrum(fig, OCTAVE_EQUIPMENT, height=440)
     st.plotly_chart(fig, use_container_width=True)
     st.download_button("⬇ Descargar cálculo de instalaciones", df.to_csv(index=False).encode("utf-8"), "sonara_instalaciones.csv", "text/csv", key="svc_download")
     solution_save_widget({
@@ -7612,6 +7696,7 @@ def app_reverberacion_iso():
     fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=rev_freqs)
     fig.update_yaxes(title="Tiempo de reverberación [s]", rangemode="tozero")
     fig.update_layout(template="plotly_dark", height=370, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    style_acoustic_spectrum(fig, rev_freqs, height=440)
     st.plotly_chart(fig, use_container_width=True)
     st.download_button("⬇ Descargar cálculo de reverberación", df.to_csv(index=False).encode("utf-8"), "sonara_reverberacion.csv", "text/csv", key="rev_download")
     solution_save_widget({
@@ -7679,6 +7764,7 @@ def app_exterior_iso():
     fig.update_xaxes(type="log", title="Frecuencia [Hz]")
     fig.update_yaxes(title="Lw [dB]")
     fig.update_layout(template="plotly_dark", height=390, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    style_acoustic_spectrum(fig, result["frequencies"], height=460)
     st.plotly_chart(fig, use_container_width=True)
     st.download_button("⬇ Descargar ISO 12354-4", frame.to_csv(index=False).encode("utf-8"), "sonara_iso12354_4.csv", "text/csv", key="outdoor_download")
 
@@ -7767,6 +7853,7 @@ def app_lluvia():
     fig.update_xaxes(type="log", title="Frecuencia [Hz]")
     fig.update_yaxes(title="Nivel [dB]")
     fig.update_layout(template="plotly_dark", height=420, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(8,18,32,.78)")
+    style_acoustic_spectrum(fig, indoor["frequencies"], height=470)
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Trazado ejecutado: " + " → ".join(radiating["calculation_trace"]))
     st.download_button("⬇ Descargar ruido de lluvia", frame.to_csv(index=False).encode("utf-8"), "sonara_lluvia.csv", "text/csv", key="rain_download")
