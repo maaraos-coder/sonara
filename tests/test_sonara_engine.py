@@ -7,6 +7,7 @@ from sonara_engine import (
     double_leaf_tl,
     mam_resonance_frequencies,
     plate_properties,
+    porous_absorption_coefficients,
     single_leaf_tl,
 )
 
@@ -61,6 +62,38 @@ class SonaraEngineTests(unittest.TestCase):
         self.assertGreater(resonances[0], 0.0)
         self.assertGreater(upper, resonances[0])
         self.assertTrue(np.all(np.isfinite(curve)))
+
+    def test_porous_absorption_is_bounded_and_frequency_dependent(self):
+        frequencies = np.array([125, 250, 500, 1000, 2000, 4000], dtype=float)
+        alpha = porous_absorption_coefficients(10000.0, 0.05, frequencies)
+        self.assertTrue(np.all(np.isfinite(alpha)))
+        self.assertTrue(np.all((alpha >= 0.0) & (alpha < 1.0)))
+        self.assertGreater(float(np.max(alpha) - np.min(alpha)), 0.1)
+
+    def test_double_leaf_uses_catalogue_absorber_and_connection(self):
+        frequencies = np.array([63, 125, 250, 500, 1000, 2000, 4000], dtype=float)
+        layers = [{"material": GYPSUM, "espesor": 15.0}]
+        baseline, *_ = double_leaf_tl(layers, layers, 70.0, frequencies)
+        detailed, *_ = double_leaf_tl(
+            layers,
+            layers,
+            70.0,
+            frequencies,
+            absorbent_properties={
+                "thickness_m": 0.05,
+                "flow_resistivity_pa_s_m2": 10000.0,
+            },
+            connection_properties={
+                "name": "Independent metal frame",
+                "category": "MetalFrame",
+                "stud_width_m": 0.035,
+                "defined_stud_spacing_m": 0.6,
+                "attenuation_factor": 2.0,
+                "resonant_transmission": 0,
+            },
+        )
+        self.assertTrue(np.all(np.isfinite(detailed)))
+        self.assertFalse(np.allclose(baseline, detailed))
 
 
 if __name__ == "__main__":
