@@ -22,19 +22,20 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Alcance acústico docente
+## Alcance acústico
 
 La calculadora entrega valores proyectados de aislamiento aéreo, impacto,
 fachada, radiación al exterior, ruido de instalaciones, reverberación y lluvia.
 No asigna automáticamente
 clases ISO/TS 19488:2021; la consulta de las tablas, clasificación y
-justificación corresponden al estudiante.
+justificación corresponden al usuario responsable del proyecto.
 
 `SONARA-PHYSICS-1` calcula propiedades
 de placa isótropa, caminos resonante/no resonante y sistemas masa-aire-masa;
 `SONARA-ISO12354-RAIN-1` consume esas curvas, ejecuta los caminos de las partes
 1 a 6 y el trazado físico de lluvia simple o doble/MAM. Hasta completar el
-banco de comparación, los resultados conservan carácter de proyecto y docencia.
+banco de comparación, los resultados se presentan como predicciones de proyecto
+y deben contrastarse con mediciones o ensayos normalizados cuando corresponda.
 
 Ejecutar las pruebas del motor con:
 
@@ -63,17 +64,17 @@ http://localhost:8501
 7. Elegir Docker.
 8. Deploy.
 
-### Acceso Academy del Diplomado
+### Acceso institucional
 
 SONARA reconoce como `academy` indefinida toda cuenta creada con un correo
-activo en `authorized_students` del Supabase del Diplomado. Configure en Render
-estas variables privadas:
+activo en `authorized_students` del registro institucional autorizado. Configure
+en Render estas variables privadas heredadas por compatibilidad:
 
 - `SONARA_ACADEMY_SUPABASE_URL`
 - `SONARA_ACADEMY_SUPABASE_SERVICE_ROLE_KEY`
 
 La clave debe ser `service_role`/`secret`, nunca `anon` ni `publishable`. Los
-alumnos eligen su propia contraseña de SONARA; el RUT no se copia ni se usa
+usuarios eligen su propia contraseña de SONARA; el RUT no se copia ni se usa
 como contraseña. Una cuenta trial previa se convierte automáticamente en
 Academy al volver a ingresar con el correo autorizado.
 
