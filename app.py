@@ -2387,8 +2387,9 @@ def structural_visual(
     configuracion=None,
     tipo_ventana=None,
     absorbente_tipo="Sin absorbente",
+    connection_name=None,
 ):
-    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo</div>"
+    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo · v2</div>"
     html += "<div style='display:flex;align-items:center;justify-content:center;min-height:230px;padding:12px;'>"
 
     if tipo == "Panel simple":
@@ -2410,7 +2411,8 @@ def structural_visual(
     html += "</div>"
 
     if tipo == "Panel doble":
-        nota = f"Configuración: {configuracion}. Absorbente: {absorbente_tipo}."
+        connection_text = sonara_html_escape(connection_name) if connection_name else sonara_html_escape(configuracion or "Sin definir")
+        nota = f"Conexión: {connection_text}. Absorbente: {sonara_html_escape(absorbente_tipo)}."
     elif tipo == "Ventana":
         nota = f"Tipo de ventana: {tipo_ventana}."
     else:
@@ -2974,6 +2976,7 @@ def app_calculator():
                 configuracion=configuracion,
                 tipo_ventana=tipo_ventana,
                 absorbente_tipo=absorbente_tipo,
+                connection_name=connection_data.get("display_name") if connection_data else None,
             ),
             unsafe_allow_html=True,
         )
