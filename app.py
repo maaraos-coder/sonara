@@ -298,7 +298,20 @@ html, body, [class*="css"] {
 }
 
 #MainMenu, footer { visibility: hidden; }
-header { visibility: visible; }
+/* Remove Streamlit's white header while keeping sidebar controls usable. */
+[data-testid="stHeader"] {
+    background: transparent !important;
+    height: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+[data-testid="stToolbar"] {
+    display: none !important;
+}
+[data-testid="stSidebarCollapsedControl"] {
+    background: #07111d !important;
+    color: #F5F8FF !important;
+}
 
 .block-container {
     padding-top: 1.3rem;
