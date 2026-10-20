@@ -4273,6 +4273,63 @@ def impact_transmission_scheme_html(flanks_active):
     """)
 
 
+
+def impact_construction_html(slab_mm, floor_name, ceiling_name, cover=None):
+    """Section of the selected floor; unspecified dimensions remain symbolic."""
+    escape = sonara_html_escape
+    cover = cover if cover is not None else {}
+    def positive_mm(key):
+        value = cover.get(key)
+        try:
+            number = float(value) * 1000
+            return number if np.isfinite(number) and number > 0 else None
+        except (ValueError, TypeError):
+            return None
+    floor_mm = positive_mm("thickness_m")
+    underlay_mm = positive_mm("underlay_thickness_m")
+    has_floor = str(floor_name).strip().lower() not in {"sin revestimiento", "none", "aucun", "ninguno"}
+    has_ceiling = ceiling_name != "Sin cielo"
+    layers = []
+    if has_floor:
+        layers.append(("Revestimiento superior", floor_mm, "#b68450"))
+    if underlay_mm:
+        layers.append(("Base elástica", underlay_mm, "#4bbfa7"))
+    layers.append(("Losa base", slab_mm, "#98a2af"))
+    # All known thicknesses share one scale. Unknown layers are symbolic.
+    known_total = sum(mm or 0 for _, mm, _ in layers)
+    scale = min(0.65, 120 / max(known_total, 1))
+    parts = [
+        "<div class='sonara-card' style='margin-top:20px'><div class='sonara-card-title'>Visual constructivo</div>",
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 300' role='img' aria-label='Corte del entrepiso con revestimiento, losa y cielo seleccionado' style='display:block;width:100%;height:auto'>",
+        "<text x='300' y='23' text-anchor='middle' fill='#8fd0ff' font-size='14'>Corte vertical del entrepiso</text>",
+        "<text x='46' y='53' fill='white' font-size='13'>Recinto emisor · impacto</text>",
+        "<path d='M95 33 V68 M89 60 L95 69 L101 60' fill='none' stroke='#ff9b45' stroke-width='3'/>",
+    ]
+    y = 76.0
+    for name, mm, color in layers:
+        height = mm * scale if mm else 20
+        parts.append(f"<rect x='45' y='{y:.3f}' width='290' height='{height:.3f}' fill='{color}' stroke='#e5e7eb' stroke-width='.7'/>")
+        label = f"{name}: {mm:g} mm" if mm else f"{name}: espesor sin definir"
+        # Numbered labels in separate rows avoid collisions for thin layers.
+        index = layers.index((name, mm, color)) + 1
+        parts.append(f"<text x='350' y='{83 + (index-1)*25}' fill='white' font-size='12'>{index}. {escape(label)}</text>")
+        parts.append(f"<text x='30' y='{y+height/2+4:.3f}' text-anchor='middle' fill='white' font-size='11'>{index}</text>")
+        y += height
+    if has_ceiling:
+        ceiling_y = y + 44
+        for x in (95, 280):
+            parts.append(f"<path d='M{x} {y:.3f} V{ceiling_y:.3f}' stroke='#8fd0ff' stroke-width='2' stroke-dasharray='4 3'/>")
+        if "lana" in ceiling_name.lower():
+            parts.append(f"<rect x='45' y='{y+15:.3f}' width='290' height='12' fill='#c1a542' opacity='.8'/>")
+        parts.append(f"<rect x='45' y='{ceiling_y:.3f}' width='290' height='8' fill='#d6dae1' stroke='white'/>")
+        parts.append(f"<text x='350' y='{ceiling_y+7:.3f}' fill='white' font-size='12'>Cielo inferior</text>")
+        y = ceiling_y + 8
+    parts.append(f"<text x='45' y='{min(y+35, 287):.3f}' fill='white' font-size='13'>Recinto receptor</text></svg>")
+    parts.append(f"<div style='font-size:12px;overflow-wrap:anywhere'><b>Piso:</b> {escape(floor_name)}<br><b>Cielo:</b> {escape(ceiling_name)}</div>")
+    parts.append("<div style='font-size:11px;color:#aab7c7;margin-top:8px'>Espesores conocidos proporcionales. Capas sin espesor, suspensiones y cámara de cielo esquemáticas.</div></div>")
+    return "".join(parts)
+
+
 def app_impacto():
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>Impacto — Ruido de impacto entre recintos</h2>",
@@ -4308,6 +4365,7 @@ def app_impacto():
             horizontal=True
         )
 
+        esp_losa = None
         if modo_losa == "Calcular por masa superficial":
             esp_losa = st.number_input("Espesor losa hormigón [mm]", value=150.0, min_value=50.0, step=10.0)
             dens_losa = st.number_input("Densidad hormigón [kg/m³]", value=2400.0, min_value=500.0, step=50.0)
@@ -4614,6 +4672,14 @@ def app_impacto():
             </div>
             """,
             unsafe_allow_html=True
+        )
+
+        st.markdown(
+            impact_construction_html(
+                esp_losa, tipo_piso, tipo_cielo,
+                cover_row if use_floor_catalog else None,
+            ),
+            unsafe_allow_html=True,
         )
 
         if modo_impacto == "ISO 12354-2":
