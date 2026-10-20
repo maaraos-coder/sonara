@@ -2400,8 +2400,16 @@ def cavity_html(camara, absorbente_tipo, configuracion):
 
 
 def double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data=None):
-    """Plan section displayed with vertical leaves; three distinct frame layouts."""
+    """Vertical leaves drawn with a shared thickness scale in the available width."""
     depth = max(float(cavity or 1), 1)
+    left_mm = sum(max(float(layer.get("espesor", 0)), 0) for layer in left or [])
+    right_mm = sum(max(float(layer.get("espesor", 0)), 0) for layer in right or [])
+    total_mm = left_mm + depth + right_mm
+    scale = min(1.5, 260.0 / total_mm)
+    assembly_x = (320.0 - total_mm * scale) / 2.0
+    cavity_x = assembly_x + left_mm * scale
+    cavity_width = depth * scale
+    cavity_end = cavity_x + cavity_width
     filled = absorber not in (None, "", "Sin absorbente")
     thickness = float((absorber_data or {}).get("thickness_m") or 0) * 1000
     staggered = configuration in ("Montantes independientes", "Montantes alternados")
@@ -2413,6 +2421,7 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
         "<text x='160' y='20' text-anchor='middle' fill='#8fd0ff' font-size='12'>Esquema constructivo</text>",
         "<text x='64' y='44' text-anchor='middle' fill='white' font-size='12'>Emisor</text>",
         "<text x='256' y='44' text-anchor='middle' fill='white' font-size='12'>Receptor</text>",
+        f"<g transform='translate({cavity_x:.4f} 0) scale({cavity_width/160:.6f} 1) translate(-80 0)'>",
         "<rect x='80' y='60' width='160' height='240' fill='#0b2336' stroke='#60a5fa' stroke-dasharray='4 3'/>",
     ]
     if filled:
@@ -2434,12 +2443,17 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     else:
         for y in (100, 250):
             parts.append(profile(80, 240, y))
-    for layers, edge, direction in ((left, 80, -1), (right, 240, 1)):
-        band = min(10, 28/max(len(layers or []), 1))
-        for i, layer in enumerate(layers or []):
+    parts.append("</g>")
+    for layers, edge, direction in ((left, cavity_x, -1), (right, cavity_end, 1)):
+        offset = 0.0
+        for layer in layers or []:
             color = sonara_html_escape(layer.get("material", {}).get("color", "#9ca3af"))
-            x = edge+i*band if direction > 0 else edge-(i+1)*band
-            parts.append(f"<rect x='{x:.2f}' y='60' width='{band:.2f}' height='240' fill='{color}' stroke='#e5e7eb' stroke-width='.8'/>")
+            layer_mm = max(float(layer.get("espesor", 0)), 0)
+            band = layer_mm * scale
+            x = edge + offset if direction > 0 else edge - offset - band
+            name = sonara_html_escape(layer.get("nombre", "Placa"))
+            parts.append(f"<rect x='{x:.4f}' y='60' width='{band:.4f}' height='240' fill='{color}' stroke='#e5e7eb' stroke-width='.6'><title>{name}: {layer_mm:g} mm</title></rect>")
+            offset += band
     parts.extend([
         "<rect x='92' y='176' width='136' height='39' rx='5' fill='#03070d' opacity='.94'/>",
         f"<text x='160' y='192' text-anchor='middle' fill='white' font-size='12'>Cámara: {depth:g} mm</text>",
@@ -2458,7 +2472,7 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
                 details.append("<div>El absorbente seleccionado supera el espesor de cámara.</div>")
         else:
             details.append("<div>Espesor del absorbente sin definir; relleno simbólico.</div>")
-    details.append("<div>Vista girada del corte en planta, sin escala. Perfiles esquemáticos; su forma no reproduce el producto del catálogo.</div>")
+    details.append("<div>Vista girada del corte en planta. Espesores proporcionales con ajuste al ancho disponible. Perfiles esquemáticos.</div>")
     return "".join(parts) + "<div style='font-size:11px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
 
 
