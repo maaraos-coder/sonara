@@ -747,6 +747,9 @@ div[data-testid="stDownloadButton"] button:hover {
 
 .sonara-cavity {
     position: relative;
+    height: 190px;
+    flex-shrink: 1;
+    min-width: 62px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -791,16 +794,23 @@ div[data-testid="stDownloadButton"] button:hover {
 .sonara-stud.right { right: 18%; }
 
 .sonara-cavity-label {
-    position: relative;
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    bottom: 6px;
     z-index: 3;
     color: #FFFFFF;
+    background: rgba(3,7,13,.88);
+    border-radius: 4px;
     font-size: 10px;
-    font-weight: 900;
+    font-weight: 700;
+    line-height: 1.35;
     text-align: center;
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    padding: 8px 3px;
-    text-shadow: 0 1px 4px #000, 0 0 8px #000;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    writing-mode: horizontal-tb;
+    transform: none;
+    padding: 4px 2px;
 }
 
 .result-card {
@@ -2354,7 +2364,7 @@ def cavity_html(camara, absorbente_tipo, configuracion):
     width = max(62, min(camara * 1.55, 170))
     has_absorber = absorbente_tipo not in (None, "", "Sin absorbente")
     fill_class = "sonara-cavity-fill absorber" if has_absorber else "sonara-cavity-fill"
-    fill_label = absorbente_tipo if has_absorber else "Cámara de aire"
+    fill_label = "Absorbente" if has_absorber else "Aire"
 
     if configuracion == "Montante simple":
         studs = "<span class='sonara-stud single' title='Montante simple dentro de la cámara'></span>"
@@ -2389,7 +2399,7 @@ def structural_visual(
     absorbente_tipo="Sin absorbente",
     connection_name=None,
 ):
-    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo · v2</div>"
+    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo · v3</div>"
     html += "<div style='display:flex;align-items:center;justify-content:center;min-height:230px;padding:12px;'>"
 
     if tipo == "Panel simple":
