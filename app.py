@@ -745,6 +745,64 @@ div[data-testid="stDownloadButton"] button:hover {
     ) !important;
 }
 
+.sonara-cavity {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 190px;
+    border-radius: 10px;
+    border: 1px dashed rgba(90,185,255,.55);
+    margin: 0 2px;
+    overflow: hidden;
+    box-shadow: inset 0 0 22px rgba(255,255,255,.05), 0 10px 24px rgba(0,0,0,.25);
+}
+
+.sonara-cavity-fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(34,154,255,.14), rgba(34,154,255,.04));
+}
+
+.sonara-cavity-fill.absorber {
+    background: repeating-linear-gradient(
+        75deg,
+        rgba(212,178,74,.72),
+        rgba(212,178,74,.72) 4px,
+        rgba(60,45,15,.42) 5px,
+        rgba(60,45,15,.42) 15px
+    );
+}
+
+.sonara-stud {
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    width: 13px;
+    z-index: 2;
+    border: 1px solid rgba(255,255,255,.65);
+    border-radius: 4px;
+    background: linear-gradient(90deg, #707b89 0 28%, #c3cad2 30% 70%, #707b89 72% 100%);
+    box-shadow: 0 0 0 2px rgba(4,9,16,.35);
+}
+
+.sonara-stud.single { left: 50%; transform: translateX(-50%); }
+.sonara-stud.left { left: 18%; }
+.sonara-stud.right { right: 18%; }
+
+.sonara-cavity-label {
+    position: relative;
+    z-index: 3;
+    color: #FFFFFF;
+    font-size: 10px;
+    font-weight: 900;
+    text-align: center;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    padding: 8px 3px;
+    text-shadow: 0 1px 4px #000, 0 0 8px #000;
+}
+
 .result-card {
     background: linear-gradient(180deg, #081827, #03070d);
     border: 1px solid rgba(10,132,255,.45);
@@ -2290,6 +2348,32 @@ def layers_html(layers):
     return html
 
 
+def cavity_html(camara, absorbente_tipo, configuracion):
+    """Dibuja la cámara como un único volumen con absorbente y montantes internos."""
+    camara = float(camara or 0)
+    width = max(62, min(camara * 1.55, 170))
+    has_absorber = absorbente_tipo not in (None, "", "Sin absorbente")
+    fill_class = "sonara-cavity-fill absorber" if has_absorber else "sonara-cavity-fill"
+    fill_label = absorbente_tipo if has_absorber else "Cámara de aire"
+
+    if configuracion == "Montante simple":
+        studs = "<span class='sonara-stud single' title='Montante simple dentro de la cámara'></span>"
+    elif configuracion in ("Montantes independientes", "Doble estructura"):
+        studs = (
+            "<span class='sonara-stud left' title='Estructura independiente lado emisor'></span>"
+            "<span class='sonara-stud right' title='Estructura independiente lado receptor'></span>"
+        )
+    else:
+        studs = ""
+
+    return (
+        f"<div class='sonara-cavity' style='width:{width}px;'>"
+        f"<span class='{fill_class}'></span>{studs}"
+        f"<span class='sonara-cavity-label'>{fill_label}<br>{camara:.0f} mm</span>"
+        "</div>"
+    )
+
+
 def structural_visual(
     tipo,
     mat1=None,
@@ -2312,20 +2396,7 @@ def structural_visual(
 
     elif tipo == "Panel doble":
         html += layers_html(layers_left or [])
-
-        if configuracion == "Montante simple":
-            html += layer_html("Montante<br>simple", 28, "#8E99A8")
-        elif configuracion == "Montantes independientes":
-            html += layer_html("Montante", 25, "#8E99A8")
-
-        if absorbente_tipo != "Sin absorbente":
-            html += layer_html(f"Lana<br>{camara:.0f} mm", camara * 1.3, "rgba(180,143,40,.35)", "wool-lines")
-        else:
-            html += layer_html(f"Aire<br>{camara:.0f} mm", camara * 1.3, "rgba(34,154,255,.06)", "air-box")
-
-        if configuracion in ["Montantes independientes", "Doble estructura"]:
-            html += layer_html("Montante", 25, "#8E99A8")
-
+        html += cavity_html(camara, absorbente_tipo, configuracion)
         html += layers_html(layers_right or [])
 
     else:
@@ -6188,6 +6259,7 @@ def sonara_draw_solution_html(solution):
     layers_right = solution.get("layers_right", []) or solution.get("capas_der", [])
     camara = sonara_safe_float(solution.get("camara_mm", solution.get("camara", 0)), 0)
     absorbente = solution.get("absorbente_tipo", "")
+    configuracion = solution.get("configuracion", "Montante simple") or "Montante simple"
 
     if not layers_left and not layers_right:
         return ""
@@ -6219,6 +6291,8 @@ def sonara_draw_solution_html(solution):
             "label": label,
             "width": int(max(44, min(120, camara))),
             "color": "#FACC15",
+            "absorbente": absorbente,
+            "configuracion": configuracion,
         })
 
     for l in layers_right or []:
@@ -6226,18 +6300,46 @@ def sonara_draw_solution_html(solution):
 
     total_w = sum(b["width"] + 8 for b in blocks) + 40
     total_w = max(total_w, 520)
-    height = 270
+    height = 285
     x = 20
     svg_parts = []
 
     svg_parts.append(f'<rect x="0" y="0" width="{total_w}" height="{height}" rx="14" fill="#07111d" stroke="#2f80ed" stroke-opacity=".35" />')
 
-    for b in blocks:
+    for block_index, b in enumerate(blocks):
         w = b["width"]
         if b["type"] == "air":
-            svg_parts.append(f'<rect x="{x}" y="45" width="{w}" height="175" rx="8" fill="#172554" stroke="#60A5FA" stroke-dasharray="6 5" stroke-width="2"/>')
-            for lx in range(int(x)+6, int(x+w), 12):
-                svg_parts.append(f'<line x1="{lx}" y1="50" x2="{lx-28}" y2="220" stroke="#FACC15" stroke-width="4" opacity=".75"/>')
+            has_absorber = b.get("absorbente") not in (None, "", "Sin absorbente")
+            cavity_fill = "#3F3519" if has_absorber else "#172554"
+            clip_id = f"cavity-clip-{block_index}"
+            svg_parts.append(
+                f'<defs><clipPath id="{clip_id}"><rect x="{x}" y="45" width="{w}" height="175" rx="8"/></clipPath></defs>'
+            )
+            svg_parts.append(
+                f'<rect x="{x}" y="45" width="{w}" height="175" rx="8" fill="{cavity_fill}" '
+                f'stroke="#60A5FA" stroke-dasharray="6 5" stroke-width="2"/>'
+            )
+            if has_absorber:
+                for lx in range(int(x)-150, int(x+w)+150, 14):
+                    svg_parts.append(
+                        f'<line x1="{lx}" y1="220" x2="{lx+42}" y2="45" stroke="#D4B24A" '
+                        f'stroke-width="5" opacity=".78" clip-path="url(#{clip_id})"/>'
+                    )
+
+            stud_positions = []
+            if b.get("configuracion") == "Montante simple":
+                stud_positions = [x + (w / 2) - 6]
+            elif b.get("configuracion") in ("Montantes independientes", "Doble estructura"):
+                stud_positions = [x + (w * .18) - 6, x + (w * .82) - 6]
+            for stud_x in stud_positions:
+                svg_parts.append(
+                    f'<rect x="{stud_x}" y="51" width="12" height="163" rx="3" fill="#9AA5B1" '
+                    f'stroke="#F3F4F6" stroke-width="1.5"/>'
+                )
+                svg_parts.append(
+                    f'<line x1="{stud_x+4}" y1="54" x2="{stud_x+4}" y2="211" '
+                    f'stroke="#626E7C" stroke-width="2" opacity=".8"/>'
+                )
         else:
             color = b.get("color", "#9CA3AF")
             svg_parts.append(f'<rect x="{x}" y="45" width="{w}" height="175" rx="8" fill="{color}" stroke="#E5E7EB" stroke-width="2"/>')
@@ -6251,6 +6353,12 @@ def sonara_draw_solution_html(solution):
             f'transform="rotate(-90 {cx} {cy})" font-size="12" font-weight="800" '
             f'font-family="Inter, Arial" fill="#FFFFFF">{label}</text>'
         )
+        if b["type"] == "air":
+            configuration_label = sonara_html_escape(b.get("configuracion", ""))
+            svg_parts.append(
+                f'<text x="{cx}" y="242" text-anchor="middle" font-size="10" font-weight="700" '
+                f'font-family="Inter, Arial" fill="#AFC9E8">{configuration_label}</text>'
+            )
         x += w + 8
 
     svg_inner = "".join(svg_parts)
