@@ -7515,7 +7515,7 @@ def app_loscaa_validation():
                 )
                 fig.update_xaxes(gridcolor="rgba(255,255,255,.10)")
                 fig.update_yaxes(gridcolor="rgba(255,255,255,.10)")
-                style_acoustic_spectrum(fig, freqs, height=430)
+                # This comparison uses dB on both axes, not spectral frequencies.
                 st.plotly_chart(fig, use_container_width=True)
             st.markdown(
                 """
