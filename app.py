@@ -28,12 +28,17 @@ from iso_design import (
     transmission_average_db,
 )
 from material_catalog import (
+    absorption_catalog,
+    absorption_properties,
     browse_catalog,
     calculation_materials,
     catalog_available,
     catalog_summary,
+    connection_catalog,
+    connection_properties,
     floor_cover_catalog,
     floor_cover_spectrum,
+    porous_absorption_spectrum,
 )
 from sonara_engine import (
     ENGINE_ID,
@@ -63,7 +68,7 @@ from iso12354_engine import (
 # Motor físico principal SONARA-PHYSICS
 # =========================================================
 
-APP_VERSION = "BETA 0.12 · SONARA ISO 12354 + RAIN"
+APP_VERSION = "BETA 0.13 · CATÁLOGO FÍSICO + ISO 12354 + RAIN"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -1141,8 +1146,8 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
         "password_hash": pw_hash,
         "salt": salt,
         "nombre": (academy_student or {}).get("display_name") or nombre or email,
-        "empresa": empresa or ("SONARA / Akusoft" if is_superuser else ("Diplomado en Acústica en la Edificación" if is_academy else "")),
-        "cargo": cargo or ("Developer" if is_superuser else ("Alumno" if is_academy else "")),
+        "empresa": empresa or ("SONARA / Akusoft" if is_superuser else ""),
+        "cargo": cargo or ("Developer" if is_superuser else ("Usuario autorizado" if is_academy else "")),
         "first_login": now.isoformat(timespec="seconds"),
         "last_login": now.isoformat(timespec="seconds"),
         "license_type": "developer" if is_superuser else ("academy" if is_academy else "trial"),
@@ -1159,7 +1164,7 @@ def ensure_user_record(email, password, nombre="", empresa="", cargo=""):
     if is_superuser:
         return True, "Cuenta Developer creada con acceso indefinido."
     if is_academy:
-        return True, "Cuenta Academy del Diplomado creada con acceso indefinido."
+        return True, "Cuenta institucional creada con acceso indefinido."
     return True, "Usuario creado correctamente."
 
 
@@ -1322,9 +1327,9 @@ def get_license(email):
                 "name": row.get("nombre", email)
             }
 
-    # Una cuenta Academy ya reconocida conserva su acceso aunque Supabase esté
-    # temporalmente fuera de servicio. No se almacenan RUT ni credenciales del
-    # laboratorio en SONARA.
+    # Una cuenta institucional ya reconocida conserva su acceso aunque
+    # Supabase esté temporalmente fuera de servicio. SONARA no copia ni
+    # almacena credenciales del sistema de origen.
     if remote_user is not None and str(remote_user.get("license_type", "")).lower() == "academy":
         return {
             "allowed": True,
@@ -1379,8 +1384,8 @@ def get_license(email):
             "name": local_match.iloc[0].get("nombre", email)
         }
 
-    # Nómina viva del Diplomado. También convierte automáticamente una cuenta
-    # trial previa en Academy cuando el correo coincide con un alumno activo.
+    # Nómina institucional autorizada. También convierte automáticamente una
+    # cuenta trial previa cuando el correo coincide con un usuario activo.
     academy_student = academy_student_by_email(email)
     if academy_student is not None:
         update_sonara_account(
@@ -1546,8 +1551,8 @@ def sidebar(license_info=None):
             html = f"""
             <div class='sidebar-license-card'>
                 <div class='sidebar-title'>Estado de licencia</div>
-                <div class='sidebar-badge'>🎓 ACADEMY</div>
-                <div class='sidebar-small'>Alumno autorizado</div>
+                <div class='sidebar-badge'>◆ INSTITUCIONAL</div>
+                <div class='sidebar-small'>Usuario autorizado</div>
                 <div class='sidebar-days'>Activa</div>
                 <div class='sidebar-small'>Vigencia: {license_info['expires']}</div>
             </div>
@@ -1605,7 +1610,8 @@ def hero():
         <div class='hero-line'></div>
         <div class='hero-main'>Asistente de diseño acústico para especialistas y no especialistas</div>
         <div class='hero-sub'>
-            Analiza soluciones constructivas, diseña alternativas, optimiza desempeño/costo y verifica cumplimiento con criterios normativos o referenciales.
+            Aplicación independiente para analizar soluciones constructivas, diseñar alternativas,
+            optimizar desempeño/costo y contrastar resultados con criterios normativos o referenciales.
         </div>
         <div class='hero-tags'>ANALIZA · DISEÑA · OPTIMIZA · CUMPLE</div>
     </div>
@@ -1636,7 +1642,7 @@ def login_page():
             cargo = st.text_input("Cargo", key="reg_cargo")
             password2 = st.text_input("Repetir contraseña", type="password", key="auth_password2")
 
-            st.caption("Si tu correo está en la nómina activa del Diplomado, la cuenta se habilitará como Academy indefinida.")
+            st.caption("Si tu correo pertenece a una organización autorizada, la cuenta se habilitará con acceso institucional indefinido.")
             if st.button("Crear cuenta", use_container_width=True):
                 e = norm(email)
                 if not e or "@" not in e:
@@ -1682,7 +1688,7 @@ def login_page():
         <div class='card'>
             <div class='card-title'>SONARA VERSIÓN BETA</div>
             <div class='card-text'>
-                Plataforma de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
+                Aplicación independiente de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
             </div>
             <div style='margin-top:18px;'>
                 <div class='card-text'>● Proyectos con recintos y matriz acústica</div>
@@ -1711,9 +1717,9 @@ def login_page():
     
         p2.markdown("""
         <div class='plan academy'>
-            <div class='plan-title academy'>ACADEMY</div>
+            <div class='plan-title academy'>INSTITUCIONAL</div>
             <div class='plan-price'>Docencia</div>
-            <div class='plan-text'>Licencias para cursos, diplomados y talleres.</div>
+            <div class='plan-text'>Licencias para organizaciones, equipos y programas profesionales.</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -2039,6 +2045,8 @@ def walls_double_multilayer_tl(
     configuracion="Montante simple",
     absorbente_tipo="Sin absorbente",
     distancia_fijaciones_mm=600.0,
+    absorbent_properties=None,
+    connection_properties=None,
 ):
     """Panel doble calculado por el solucionador masa-aire-masa principal."""
     tl, left, right, resonances, fl = engine_double_leaf_tl(
@@ -2049,6 +2057,8 @@ def walls_double_multilayer_tl(
         configuration=configuracion,
         absorbent=absorbente_tipo,
         fastener_spacing_mm=distancia_fijaciones_mm,
+        absorbent_properties=absorbent_properties,
+        connection_properties=connection_properties,
     )
     return tl, left.surface_mass + right.surface_mass, min(left.critical_frequency, right.critical_frequency), float(resonances[0]), fl
 
@@ -2588,8 +2598,10 @@ def app_calculator():
         configuracion = None
         tipo_ventana = None
         absorbente_tipo = "Sin absorbente"
+        absorbent_data = None
         camara = None
         distancia_fijaciones = 600.0
+        connection_data = None
         layers_left = []
         layers_right = []
 
@@ -2604,11 +2616,54 @@ def app_calculator():
             )
 
         elif tipo == "Panel doble":
-            configuracion = st.selectbox(
-                "Configuración estructural",
-                ["Montante simple", "Montantes independientes", "Doble estructura"],
-                index=0,
+            connection_mode = st.radio(
+                "Definición de la conexión estructural",
+                ["Catálogo técnico", "Configuración genérica"],
+                horizontal=True,
+                key="pd_connection_mode",
             )
+            if connection_mode == "Catálogo técnico":
+                connections = connection_catalog()
+                connection_labels = connections["display_name"].tolist()
+                default_connection = next(
+                    (
+                        idx for idx, row in connections.reset_index(drop=True).iterrows()
+                        if str(row.get("category", "")) == "MetalFrame"
+                        and 0.055 <= float(row.get("cavity_width_m") or row.get("stud_depth_m") or 0.0) <= 0.10
+                    ),
+                    0,
+                )
+                selected_connection = st.selectbox(
+                    "Conexión / montante del catálogo",
+                    connection_labels,
+                    index=default_connection,
+                    key="pd_connection_catalog_item",
+                )
+                connection_row = connections.loc[connections["display_name"] == selected_connection].iloc[0]
+                connection_data = connection_properties(int(connection_row["entity_id"]))
+                connection_label = (str(connection_data.get("display_name") or "") + " " + str(connection_data.get("category") or "")).lower()
+                if "independ" in connection_label or "double" in connection_label or "doble" in connection_label:
+                    configuracion = "Montantes independientes"
+                else:
+                    configuracion = "Montante simple"
+                extracted_cavity = float(connection_data.get("cavity_width_m") or connection_data.get("stud_depth_m") or 0.070)
+                extracted_spacing = float(connection_data.get("defined_stud_spacing_m") or 0.600)
+                st.markdown(
+                    f"<div class='result-note'><b>{selected_connection}</b><br>"
+                    f"Familia: {connection_data.get('category') or 'sin categoría'} · "
+                    f"profundidad: {1000 * float(connection_data.get('stud_depth_m') or 0):.1f} mm · "
+                    f"separación: {1000 * extracted_spacing:.0f} mm · "
+                    f"transmisión resonante: {'sí' if connection_data.get('resonant_transmission') else 'no'}.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                configuracion = st.selectbox(
+                    "Configuración estructural",
+                    ["Montante simple", "Montantes independientes", "Doble estructura"],
+                    index=0,
+                )
+                extracted_cavity = 0.070
+                extracted_spacing = 0.600
 
             layers_left = layer_inputs(
                 "pd_ext",
@@ -2621,23 +2676,59 @@ def app_calculator():
 
             camara = st.number_input(
                 "Cámara [mm]",
-                value=70.0,
+                value=float(extracted_cavity * 1000.0),
                 min_value=1.0,
                 step=5.0,
+                key=f"pd_cavity_{connection_data.get('entity_id') if connection_data else 'generic'}",
             )
 
-            absorbente_tipo = st.selectbox(
-                "Material absorbente en cámara",
-                ["Sin absorbente", "Lana mineral 40 kg/m³", "Lana mineral 60 kg/m³", "Lana mineral 80 kg/m³"],
-                index=2,
+            absorber_mode = st.radio(
+                "Definición del absorbente de cámara",
+                ["Catálogo poroso", "Modelo genérico"],
+                horizontal=True,
+                key="pd_absorber_mode",
             )
+            if absorber_mode == "Catálogo poroso":
+                absorbers = absorption_catalog()
+                absorber_labels = ["Sin absorbente"] + absorbers["display_name"].tolist()
+                if absorbers.empty:
+                    default_absorber = 0
+                else:
+                    score = (
+                        (absorbers["density_kg_m3"] - 60.0).abs()
+                        + 300.0 * (absorbers["thickness_m"] - min(extracted_cavity, 0.070)).abs()
+                    )
+                    default_absorber = int(score.reset_index(drop=True).idxmin()) + 1
+                absorbente_tipo = st.selectbox(
+                    "Material absorbente en cámara",
+                    absorber_labels,
+                    index=default_absorber,
+                    key="pd_absorber_catalog_item",
+                )
+                if absorbente_tipo != "Sin absorbente":
+                    absorber_row = absorbers.loc[absorbers["display_name"] == absorbente_tipo].iloc[0]
+                    absorbent_data = absorption_properties(int(absorber_row["entity_id"]))
+                    st.markdown(
+                        f"<div class='result-note'>Espesor: <b>{1000 * absorbent_data['thickness_m']:.0f} mm</b> · "
+                        f"densidad: <b>{absorbent_data['density_kg_m3']:.1f} kg/m³</b> · "
+                        f"resistividad al flujo: <b>{absorbent_data['flow_resistivity_pa_s_m2']:.0f} Pa·s/m²</b>. "
+                        "La absorción se estima físicamente desde estas propiedades; no se presenta como curva medida.</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                absorbente_tipo = st.selectbox(
+                    "Material absorbente en cámara",
+                    ["Sin absorbente", "Lana mineral 40 kg/m³", "Lana mineral 60 kg/m³", "Lana mineral 80 kg/m³"],
+                    index=2,
+                )
 
             if configuracion == "Montante simple":
                 distancia_fijaciones = st.number_input(
-                    "Distancia entre fijaciones [mm]",
-                    value=600.0,
+                    "Separación estructural / fijaciones [mm]",
+                    value=float(extracted_spacing * 1000.0),
                     min_value=100.0,
                     step=50.0,
+                    key=f"pd_spacing_{connection_data.get('entity_id') if connection_data else 'generic'}",
                 )
 
             layers_right = layer_inputs(
@@ -2707,6 +2798,8 @@ def app_calculator():
             configuracion=configuracion,
             absorbente_tipo=absorbente_tipo,
             distancia_fijaciones_mm=distancia_fijaciones,
+            absorbent_properties=absorbent_data,
+            connection_properties=connection_data,
         )
 
     else:
@@ -2921,6 +3014,8 @@ def app_calculator():
         descripcion = f"{tipo}"
         if tipo == "Panel doble":
             descripcion += f" · {configuracion} · cámara {camara} mm · {absorbente_tipo}"
+            if connection_data:
+                descripcion += f" · conexión {connection_data.get('display_name', 'catálogo técnico')}"
         if tipo == "Ventana":
             descripcion += f" · {tipo_ventana}"
 
@@ -2956,11 +3051,17 @@ def app_calculator():
             "camara": camara,
             "configuracion": configuracion,
             "absorbente": absorbente_tipo,
+            "connection_catalog_id": connection_data.get("entity_id") if connection_data else None,
+            "connection_catalog_name": connection_data.get("display_name") if connection_data else None,
+            "connection_catalog_properties": connection_data,
+            "absorbent_catalog_id": absorbent_data.get("entity_id") if absorbent_data else None,
+            "absorbent_catalog_name": absorbent_data.get("display_name") if absorbent_data else None,
+            "absorbent_catalog_properties": absorbent_data,
             "tipo_elemento": tipo,
             "tipo_ventana": tipo_ventana,
         }, key_prefix="save_airborne")
 
-    with st.expander("Validar predicción con ensayo de laboratorio o medición", expanded=False):
+    with st.expander("Validar predicción con ensayo normalizado o medición", expanded=False):
         st.caption(
             "Suba un CSV con dos columnas: frecuencia en Hz y R medido en dB. "
             "SONARA alinea las bandas, calcula errores y compara Rw; no determina cumplimiento."
@@ -3706,7 +3807,7 @@ def app_iso12354():
                 <ul style='color:#DCEBFF;line-height:1.7;'>
                     <li><b>ISO 12354-1:2017</b> — Building acoustics — Estimation of acoustic performance of buildings from the performance of elements — Part 1: Airborne sound insulation between rooms.</li>
                     <li><b>ISO 717-1:2020</b> — Acoustics — Rating of sound insulation in buildings and of building elements — Part 1: Airborne sound insulation.</li>
-                    <li><b>ISO 10140-2:2021</b> — Acoustics — Laboratory measurement of sound insulation of building elements — Part 2: Measurement of airborne sound insulation.</li>
+                    <li><b>ISO 10140-2:2021</b> — Medición normalizada del aislamiento acústico aéreo de elementos de construcción.</li>
                     <li><b>ISO 16283-1:2014</b> — Acoustics — Field measurement of sound insulation in buildings and of building elements — Part 1: Airborne sound insulation.</li>
                     <li><b>ISO 16283-3:2016</b> — Acoustics — Field measurement of sound insulation in buildings and of building elements — Part 3: Façade sound insulation.</li>
                     <li><b>ISO 12354-3:2017</b> — Building acoustics — Estimation of acoustic performance of buildings from the performance of elements — Part 3: Airborne sound insulation against outdoor sound.</li>
@@ -3737,7 +3838,7 @@ def app_biblioteca():
             <ul style='color:#DCEBFF;line-height:1.8;'>
                 <li><b>ISO 12354-1:2017</b> — Estimación del aislamiento aéreo entre recintos desde el desempeño de elementos constructivos.</li>
                 <li><b>ISO 717-1:2020</b> — Evaluación ponderada de aislamiento aéreo: Rw, C, Ctr, DnT,w.</li>
-                <li><b>ISO 10140-2:2021</b> — Medición en laboratorio del aislamiento acústico aéreo de elementos de construcción.</li>
+                <li><b>ISO 10140-2:2021</b> — Medición normalizada del aislamiento acústico aéreo de elementos de construcción.</li>
                 <li><b>ISO 16283-1:2014</b> — Medición en terreno del aislamiento acústico aéreo entre recintos.</li>
                 <li><b>ISO 16283-3:2016</b> — Medición en terreno del aislamiento acústico de fachadas.</li>
                 <li><b>ISO 12354-3:2017</b> — Predicción del aislamiento frente a ruido exterior.</li>
@@ -3775,7 +3876,7 @@ def app_biblioteca():
                     <li><b>SONARA-PHYSICS:</b> cálculo físico de R(f), Rw, C y Ctr de elementos constructivos.</li>
                     <li><b>ISO 717-1:</b> clasificación ponderada de curvas de aislamiento.</li>
                     <li><b>ISO 12354-1:</b> estimación entre recintos, transmisión directa, flanqueos y corrección de uniones Kij.</li>
-                    <li><b>ISO 10140-2:</b> comparación con ensayos de laboratorio.</li>
+                    <li><b>ISO 10140-2:</b> comparación con ensayos normalizados.</li>
                     <li><b>ISO 16283-1:</b> comparación con mediciones en terreno.</li>
                     <li><b>ISO 12354-2 / ISO 717-2:</b> predicción y evaluación de ruido de impacto.</li>
                 </ul>
@@ -4441,7 +4542,7 @@ def app_impacto():
                 <li><b>ISO 12354-2:2017:</b> predicción de ruido de impacto entre recintos.</li>
                 <li><b>ISO 717-2:2020:</b> evaluación ponderada Ln,w, L'nT,w y CI.</li>
                 <li><b>ISO 16283-2:2020:</b> medición en terreno de ruido de impacto.</li>
-                <li><b>ISO 10140-3:2021:</b> medición de laboratorio de aislamiento a ruido de impacto.</li>
+                <li><b>ISO 10140-3:2021:</b> medición normalizada de aislamiento a ruido de impacto.</li>
                 <li><b>Modelo físico:</b> piso flotante como sistema masa-resorte-masa mediante f0 = 1/(2π)√(s'/m').</li>
             </ul>
             <div class='result-note' style='margin-top:14px;'>
@@ -6536,10 +6637,14 @@ def app_materiales():
         summary = catalog_summary()
         total_catalog = int(summary["records"].sum()) if not summary.empty else 0
         calculation_count = len(calculation_materials())
-        s1, s2, s3 = st.columns(3)
+        absorber_count = len(absorption_catalog())
+        connection_count = len(connection_catalog())
+        s1, s2, s3, s4, s5 = st.columns(5)
         s1.metric("Registros del catálogo", f"{total_catalog:,}".replace(",", "."))
-        s2.metric("Materiales calculables", f"{calculation_count:,}".replace(",", "."))
-        s3.metric("Motor principal", ENGINE_ID)
+        s2.metric("Placas calculables", f"{calculation_count:,}".replace(",", "."))
+        s3.metric("Absorbentes porosos", f"{absorber_count:,}".replace(",", "."))
+        s4.metric("Conexiones y montantes", f"{connection_count:,}".replace(",", "."))
+        s5.metric("Motor principal", ENGINE_ID)
 
         with st.expander("Explorar catálogo acústico completo", expanded=False):
             datasets = ["Todos"] + summary["dataset"].astype(str).tolist()
@@ -6556,8 +6661,8 @@ def app_materiales():
             st.dataframe(catalog_frame, use_container_width=True, hide_index=True, height=430)
             st.caption(
                 "El catálogo conserva materiales, vidrios, absorbentes, núcleos, perfiles, "
-                "montantes, conexiones y revestimientos de piso. Solo los materiales isótropos "
-                "con propiedades completas entran directamente al cálculo de placas."
+                "montantes, conexiones y revestimientos de piso. Las placas isótropas alimentan "
+                "el aislamiento; absorbentes, conexiones, montantes y pisos ya se integran en sus cálculos específicos."
             )
 
     ensure_materials_file()
@@ -7042,7 +7147,7 @@ def app_loscaa_validation():
         """
         <div class='result-note'>
         Validación cuantitativa preliminar entre fichas LOSCAA MINVU ED13 2024 y el motor SONARA-PHYSICS.
-        La comparación usa los casos actualmente modelados en SONARA; no reemplaza ensayos de laboratorio ni certificaciones.
+        La comparación usa los casos actualmente modelados en SONARA; no reemplaza ensayos normalizados ni certificaciones.
         </div>
         """,
         unsafe_allow_html=True
@@ -7243,7 +7348,7 @@ def _iso_design_notice():
     st.info(
         "SONARA calcula los descriptores acústicos de proyecto. La consulta de "
         "ISO/TS 19488:2021, la asignación de clase y la justificación final quedan "
-        "a cargo del estudiante."
+        "a cargo del usuario."
     )
 
 
@@ -7460,14 +7565,14 @@ def app_fachada_iso():
         "frecuencias": list(map(float, result["freqs"])),
         "curva": list(map(float, result["curve"])),
         "componentes": component_rows,
-        "descripcion": "Predicción espectral de fachada; clasificación ISO/TS 19488 pendiente del estudiante.",
+        "descripcion": "Predicción espectral de fachada; clasificación ISO/TS 19488 a cargo del usuario.",
     }, key_prefix="save_facade")
 
 
 def app_instalaciones_iso():
     st.markdown("<div class='sonara-card-title'>Ruido de instalaciones · predicción de proyecto</div>", unsafe_allow_html=True)
     _iso_design_notice()
-    st.caption("Método educativo por bandas de octava inspirado en EN 12354-5. Use datos de potencia sonora del fabricante.")
+    st.caption("Método de predicción por bandas de octava basado en EN 12354-5. Use datos de potencia sonora del fabricante.")
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -7626,7 +7731,7 @@ def app_instalaciones_iso():
         "la_normalized": float(result["la_normalized"]),
         "frecuencias": list(map(float, OCTAVE_EQUIPMENT)),
         "curva": list(map(float, result["lp_normalized"])),
-        "descripcion": "Predicción por bandas; clasificación ISO/TS 19488 pendiente del estudiante.",
+        "descripcion": "Predicción por bandas; clasificación ISO/TS 19488 a cargo del usuario.",
     }, key_prefix="save_services")
 
 
@@ -7659,14 +7764,40 @@ def app_reverberacion_iso():
         ("Muros", max(2.0 * volume / max(floor_area ** 0.5, 1.0), 1.0), "Yeso pintado"),
         ("Ventanas", 6.0, "Vidrio"),
     ]
+    porous_catalog = absorption_catalog()
     surfaces = []
     for idx in range(count):
         default = defaults[idx] if idx < len(defaults) else (f"Superficie {idx + 1}", 10.0, "Hormigón / superficie dura")
-        cols = st.columns([1.3, 1, 1.5])
+        cols = st.columns([1.2, 0.8, 1.0, 1.5])
         name = cols[0].text_input("Superficie", default[0], key=f"rev_name_{idx}")
         area = cols[1].number_input("Área [m²]", 0.1, 10000.0, float(default[1]), 0.5, key=f"rev_area_{idx}")
-        preset = cols[2].selectbox("Material", list(presets), index=list(presets).index(default[2]), key=f"rev_preset_{idx}")
-        surfaces.append({"name": name, "area": area, "alpha": presets[preset]})
+        material_source = cols[2].selectbox(
+            "Origen",
+            ["Material genérico", "Catálogo poroso"],
+            key=f"rev_material_source_{idx}",
+        )
+        if material_source == "Catálogo poroso" and not porous_catalog.empty:
+            selected_absorber = cols[3].selectbox(
+                "Material",
+                porous_catalog["display_name"].tolist(),
+                key=f"rev_absorber_{idx}",
+            )
+            absorber_row = porous_catalog.loc[porous_catalog["display_name"] == selected_absorber].iloc[0]
+            absorber_id = int(absorber_row["entity_id"])
+            alpha = porous_absorption_spectrum(
+                absorber_id,
+                [125, 250, 500, 1000, 2000, 4000],
+            ).to_numpy(dtype=float)
+            surfaces.append({
+                "name": name,
+                "area": area,
+                "alpha": alpha,
+                "material": selected_absorber,
+                "source": "Estimación física desde resistividad al flujo",
+            })
+        else:
+            preset = cols[3].selectbox("Material", list(presets), index=list(presets).index(default[2]), key=f"rev_preset_{idx}")
+            surfaces.append({"name": name, "area": area, "alpha": presets[preset], "material": preset, "source": "Valor genérico"})
 
     detailed_room = room_absorption_detailed(
         volume,
@@ -7692,6 +7823,18 @@ def app_reverberacion_iso():
         "T [s]": np.round(result["reverberation_time"], 2),
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
+    surface_summary = pd.DataFrame([
+        {
+            "Superficie": surface["name"],
+            "Material": surface["material"],
+            "Área [m²]": round(float(surface["area"]), 2),
+            "Origen": surface["source"],
+        }
+        for surface in surfaces
+    ])
+    with st.expander("Trazabilidad de materiales absorbentes"):
+        st.dataframe(surface_summary, use_container_width=True, hide_index=True)
+        st.caption("Los productos del catálogo poroso se calculan desde espesor y resistividad al flujo; no corresponden a coeficientes α medidos.")
     fig = go.Figure(go.Scatter(x=rev_freqs, y=result["reverberation_time"], mode="lines+markers", line=dict(color="#46D6B3", width=3), name="T"))
     fig.update_xaxes(type="log", title="Frecuencia [Hz]", tickmode="array", tickvals=rev_freqs)
     fig.update_yaxes(title="Tiempo de reverberación [s]", rangemode="tozero")
@@ -7708,7 +7851,7 @@ def app_reverberacion_iso():
         "a_over_floor_mid": float(result["a_over_sfloor_250_2000"]),
         "frecuencias": rev_freqs,
         "curva": list(map(float, result["reverberation_time"])),
-        "descripcion": f"Predicción {method_label}; clasificación ISO/TS 19488 pendiente del estudiante.",
+        "descripcion": f"Predicción {method_label}; clasificación ISO/TS 19488 a cargo del usuario.",
     }, key_prefix="save_reverberation")
 
 
@@ -7865,7 +8008,7 @@ def app_lluvia():
         "frecuencias": list(map(float, indoor["frequencies"])),
         "curva": list(map(float, indoor["lp_curve"])),
         "trazado": radiating["calculation_trace"],
-        "descripcion": "Predicción física de lluvia; la clasificación y aceptación corresponden al alumno.",
+        "descripcion": "Predicción física de lluvia; la clasificación y aceptación corresponden al usuario.",
     }, key_prefix="save_rain")
 
 
@@ -8940,7 +9083,7 @@ def app_project_calculator_embedded(project, requirement):
     tipo_elemento_req = objetivo.get("tipo_elemento", "Paramento vertical")
 
     # Selector de calculadora según requerimiento. Las clases ISO/TS 19488 no
-    # se calculan aquí: el estudiante interpreta los descriptores obtenidos.
+    # se calculan aquí: el usuario interpreta los descriptores obtenidos.
     if tipo_elemento_req in ["Paramento horizontal", "Entrepiso", "Impacto"]:
         calc_mode_default = "Ruido de impacto"
     elif indicador in ["L'nT,w", "Ln,w", "L'nT,w+CI"]:
@@ -9511,7 +9654,7 @@ def app_ayuda():
 
     with tabs[1]:
         conceptos = pd.DataFrame([
-            {"Concepto": "Rw", "Uso": "Aislamiento de laboratorio de un elemento", "Interpretación": "Mayor es mejor"},
+            {"Concepto": "Rw", "Uso": "Aislamiento acústico de un elemento constructivo", "Interpretación": "Mayor es mejor"},
             {"Concepto": "DnT,w", "Uso": "Aislamiento medido/predicho entre recintos", "Interpretación": "Mayor es mejor"},
             {"Concepto": "D2m,nT,Atr", "Uso": "Aislamiento de fachada frente a ruido exterior", "Interpretación": "Mayor es mejor"},
             {"Concepto": "L'nT,w", "Uso": "Ruido de impacto normalizado en obra", "Interpretación": "Menor es mejor"},
@@ -9520,7 +9663,7 @@ def app_ayuda():
         ])
         st.dataframe(conceptos, use_container_width=True, hide_index=True)
         st.markdown(
-            "<div class='result-note'><b>Trabajo ISO/TS 19488:</b> SONARA entrega los valores proyectados. El estudiante debe consultar la tabla aplicable, asignar la clase y justificarla sin ayuda automática del programa.</div>",
+            "<div class='result-note'><b>Interpretación ISO/TS 19488:</b> SONARA entrega los valores proyectados. La consulta de la tabla aplicable, la asignación de clase y su justificación corresponden al usuario.</div>",
             unsafe_allow_html=True
         )
 
@@ -9545,7 +9688,7 @@ def app_ayuda():
         refs = pd.DataFrame([
             {"Área": "Vivienda Chile", "Referencia": "OGUC art. 4.1.6 / NCh352/2"},
             {"Área": "Aislamiento aéreo", "Referencia": "ISO 717-1, ISO 10140-2, ISO 16283-1"},
-            {"Área": "Clasificación de viviendas", "Referencia": "ISO/TS 19488:2021 (consulta y clasificación manual por el estudiante)"},
+            {"Área": "Clasificación de viviendas", "Referencia": "ISO/TS 19488:2021 (consulta y clasificación a cargo del usuario)"},
             {"Área": "Predicción edificios", "Referencia": "ISO 12354-1, ISO 12354-2, ISO 12354-3"},
             {"Área": "Instalaciones", "Referencia": "EN 12354-5:2023"},
             {"Área": "Absorción y reverberación", "Referencia": "EN 12354-6; verificación según ISO 3382-2"},
