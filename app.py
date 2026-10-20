@@ -72,7 +72,7 @@ from iso12354_engine import (
 
 # =========================================================
 # SONARA - app.py
-# Motor físico principal SONARA-PHYSICS
+# Motor físico principal SONARA
 # =========================================================
 
 APP_VERSION = "BETA 0.14 · OPTIMIZACIÓN POR DESCRIPTOR + ISO 12354"
@@ -2103,7 +2103,7 @@ def material_db():
 
 
 # =========================================================
-# MOTOR PRINCIPAL SONARA-PHYSICS
+# MOTOR PRINCIPAL SONARA
 # =========================================================
 
 def _integral_walls_tl_from_m_b_eta(m, B, eta, freqs):
@@ -2138,7 +2138,7 @@ def combine_layers(layers):
 
 
 def walls_multilayer_tl(layers, freqs):
-    """Panel simple multicapa calculado por SONARA-PHYSICS."""
+    """Panel simple multicapa calculado por SONARA."""
     tl, props = engine_single_leaf_tl(layers, freqs)
     return tl, props.surface_mass, props.bending_stiffness, props.loss_factor, props.critical_frequency
 
@@ -2224,7 +2224,7 @@ def walls_window_tl(mat1, esp1_mm, mat2, esp2_mm, camara_mm, freqs):
 
 
 def dvh_tl(vidrio_ext, esp_ext_mm, vidrio_int, esp_int_mm, camara_mm, freqs):
-    """Compatibilidad de interfaz para el cálculo DVH SONARA-PHYSICS."""
+    """Compatibilidad de interfaz para el cálculo DVH SONARA."""
     return walls_window_tl(
         vidrio_ext,
         esp_ext_mm,
@@ -2439,7 +2439,7 @@ def structural_visual(
     elif tipo == "Ventana":
         nota = f"Tipo de ventana: {tipo_ventana}."
     else:
-        nota = "Panel simple multicapa: capas adheridas calculadas como elemento equivalente SONARA-PHYSICS."
+        nota = "Panel simple multicapa: capas adheridas calculadas como elemento equivalente SONARA."
 
     html += f"<div class='result-note'>{nota}</div>"
     html += "</div>"
@@ -3297,7 +3297,7 @@ def app_calculator():
 
 def _iso_reference_curve_from_rw(rw):
     """
-    Curva de referencia con la misma forma usada en el cálculo SONARA-PHYSICS/ISO 717.
+    Curva de referencia con la misma forma usada en el cálculo SONARA/ISO 717.
     Se desplaza para que su valor a 500 Hz sea igual al Rw ingresado.
     """
     freqs = np.array([
@@ -3324,7 +3324,7 @@ def app_iso12354():
         """
         <div class='result-note'>
         Módulo para estimar aislamiento acústico aéreo entre dos recintos. Permite ingresar los flancos manualmente
-        o calcular su Rw usando el motor SONARA-PHYSICS. El esquema muestra solo los caminos de transmisión activados.
+        o calcular su Rw usando el motor SONARA. El esquema muestra solo los caminos de transmisión activados.
         </div>
         """,
         unsafe_allow_html=True
@@ -3494,7 +3494,7 @@ def app_iso12354():
 
                     modo_r = st.radio(
                         "R del flanco",
-                        ["Manual", "Calcular con SONARA-PHYSICS"],
+                        ["Manual", "Calcular con SONARA"],
                         horizontal=True,
                         key=f"iso12354_modo_r_{i}"
                     )
@@ -3632,7 +3632,7 @@ def app_iso12354():
         with st.expander("¿Cómo se estima R del flanqueo?"):
             st.markdown(
                 """
-                Puede ingresarse manualmente desde ensayos/fichas técnicas o calcularse con SONARA-PHYSICS.
+                Puede ingresarse manualmente desde ensayos/fichas técnicas o calcularse con SONARA.
                 Si lo calculas con SONARA, el software usa las capas del flanco y obtiene su Rw automáticamente.
                 """
             )
@@ -3966,7 +3966,7 @@ def app_iso12354():
                     <li><b>Hoeller, Parzinger & Schanda (2025)</b> — Discussion and proposed changes to Annex B of ISO 12354-1 for homogeneous building elements.</li>
                 </ul>
                 <div class='result-note' style='margin-top:14px;'>
-                    SONARA usa SONARA-PHYSICS para elementos constructivos e ISO 12354-1 como base conceptual para recintos.
+                    SONARA calcula los elementos constructivos e ISO 12354-1 como base conceptual para recintos.
                     Las referencias deben revisarse frente a normas oficiales vigentes antes de uso contractual, certificación o informe formal.
                 </div>
             </div>
@@ -4023,7 +4023,7 @@ def app_biblioteca():
             <div class='sonara-card'>
                 <div class='sonara-card-title'>Uso dentro de SONARA</div>
                 <ul style='color:#DCEBFF;line-height:1.8;'>
-                    <li><b>SONARA-PHYSICS:</b> cálculo físico de R(f), Rw, C y Ctr de elementos constructivos.</li>
+                    <li><b>SONARA:</b> cálculo físico de R(f), Rw, C y Ctr de elementos constructivos.</li>
                     <li><b>ISO 717-1:</b> clasificación ponderada de curvas de aislamiento.</li>
                     <li><b>ISO 12354-1:</b> estimación entre recintos, transmisión directa, flanqueos y corrección de uniones Kij.</li>
                     <li><b>ISO 10140-2:</b> comparación con ensayos normalizados.</li>
@@ -4843,7 +4843,7 @@ def estimate_cubicacion_tabique(
 def build_candidate_systems(mats, objetivo_rw, max_espesor, max_masa, area, prioridad):
     """
     Generador inicial de alternativas.
-    Prueba combinaciones típicas de tabiques livianos con SONARA-PHYSICS.
+    Prueba combinaciones típicas de tabiques livianos con SONARA.
     """
     paneles = [
         k for k, v in mats.items()
@@ -5996,7 +5996,7 @@ def sonara_generate_progressive_variants(base_solution=None, target_rw=45, max_e
 
 def sonara_precise_score_variant(variant):
     """
-    Cálculo SONARA-PHYSICS solo para candidatas prefiltradas.
+    Cálculo SONARA solo para candidatas prefiltradas.
     No devuelve Rw=0 silencioso salvo que realmente no existan capas.
     """
     freqs_fine = np.linspace(50, 5000, 700)
@@ -6571,7 +6571,7 @@ def app_optimizador():
     """
     st.markdown("## Optimizador IA")
     st.markdown(
-        "<div class='result-note'>Optimización contextual: SONARA parte desde la solución y requerimiento seleccionados, prueba mejoras progresivas y calcula SONARA-PHYSICS solo en las mejores candidatas.</div>",
+        "<div class='result-note'>Optimización contextual: SONARA parte desde la solución y requerimiento seleccionados, prueba mejoras progresivas y recalcula solo las mejores candidatas.</div>",
         unsafe_allow_html=True
     )
 
@@ -6738,7 +6738,7 @@ def app_optimizador():
                     <li>Luego agrega una capa adicional si no alcanza.</li>
                     <li>Después evalúa cámara con absorbente.</li>
                     <li>Finalmente prueba desacople estructural.</li>
-                    <li>Calcula SONARA-PHYSICS solo sobre candidatas filtradas para reducir tiempo.</li>
+                    <li>Recalcula solo las candidatas filtradas para reducir tiempo.</li>
                 </ul>
             </div>
             """,
@@ -6920,7 +6920,7 @@ def app_materiales():
         """
         <div class='result-note'>
         Catálogo acústico principal y biblioteca editable de SONARA. Aquí se consultan los materiales del
-        motor SONARA-PHYSICS y se mantienen los costos usados por Cubicación y Optimizador IA.
+        motor SONARA y se mantienen los costos usados por Cubicación y Optimizador IA.
         </div>
         """,
         unsafe_allow_html=True
@@ -7094,7 +7094,7 @@ def app_materiales():
         """
         <div class='result-note' style='margin-top:18px;'>
         Recomendación: usa precios reales de tus proveedores y actualiza esta biblioteca antes de ejecutar cubicaciones u optimizaciones.
-        Los parámetros densidad, E, ν y η afectan directamente los cálculos SONARA-PHYSICS.
+        Los parámetros densidad, E, ν y η afectan directamente los cálculos SONARA.
         </div>
         """,
         unsafe_allow_html=True
@@ -7439,7 +7439,7 @@ def app_loscaa_validation():
     st.markdown(
         """
         <div class='result-note'>
-        Validación cuantitativa preliminar entre fichas LOSCAA MINVU ED13 2024 y el motor SONARA-PHYSICS.
+        Validación cuantitativa preliminar entre fichas LOSCAA MINVU ED13 2024 y el motor SONARA.
         La comparación usa los casos actualmente modelados en SONARA; no reemplaza ensayos normalizados ni certificaciones.
         </div>
         """,
@@ -7685,12 +7685,12 @@ def app_fachada_iso():
             area = cols[1].number_input("Área [m²]", 0.0, 500.0, float(default[1]), 0.25, key=f"fac_comp_area_{idx}")
             calculation_mode = cols[2].selectbox(
                 "Origen acústico",
-                ["SONARA-PHYSICS", "Manual Rw/Ctr"],
+                ["SONARA", "Manual Rw/Ctr"],
                 index=0,
                 key=f"fac_mode_{idx}",
             )
 
-            if calculation_mode == "SONARA-PHYSICS":
+            if calculation_mode == "SONARA":
                 preferred = "Vidrio monolítico" if idx == 1 else "Hormigón armado"
                 preferred_index = facade_materials.index(preferred) if preferred in facade_materials else 0
                 material_name = st.selectbox(
