@@ -490,17 +490,37 @@ header { visibility: visible; }
     line-height: 1.5;
 }
 
-.top-links {
-    text-align: right;
-    color: #EAF4FF;
-    font-weight: 700;
-    font-size: 14px;
-    margin-right: 4px;
+.access-support {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin: 22px auto 4px;
 }
 
-.top-links span {
-    margin-left: 24px;
-    color: #EAF4FF;
+.access-support-item {
+    min-width: 260px;
+    padding: 13px 18px;
+    border: 1px solid rgba(124,190,255,.28);
+    border-radius: 12px;
+    background: rgba(8,18,32,.72);
+    color: #DCEBFF !important;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.access-support-item b {
+    color: #FFFFFF !important;
+}
+
+.access-support-item a {
+    color: #5EB7FF !important;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.access-support-item a:hover {
+    text-decoration: underline;
 }
 
 /* Formularios */
@@ -1587,11 +1607,6 @@ def sidebar(license_info=None):
 
 
 def hero():
-    st.markdown(
-        "<div class='top-links'><span>✉ Contacto</span><span>ⓘ Ayuda</span></div>",
-        unsafe_allow_html=True
-    )
-
     logo = ensure_sonara_logo()
 
     st.markdown("<div class='hero-wrap'>", unsafe_allow_html=True)
@@ -1610,7 +1625,7 @@ def hero():
         <div class='hero-line'></div>
         <div class='hero-main'>Asistente de diseño acústico para especialistas y no especialistas</div>
         <div class='hero-sub'>
-            Aplicación independiente para analizar soluciones constructivas, diseñar alternativas,
+            Aplicación para analizar soluciones constructivas, diseñar alternativas,
             optimizar desempeño/costo y contrastar resultados con criterios normativos o referenciales.
         </div>
         <div class='hero-tags'>ANALIZA · DISEÑA · OPTIMIZA · CUMPLE</div>
@@ -1688,7 +1703,7 @@ def login_page():
         <div class='card'>
             <div class='card-title'>SONARA VERSIÓN BETA</div>
             <div class='card-text'>
-                Aplicación independiente de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
+                Aplicación de diseño acústico por proyecto para especialistas, arquitectos y equipos técnicos.
             </div>
             <div style='margin-top:18px;'>
                 <div class='card-text'>● Proyectos con recintos y matriz acústica</div>
@@ -1699,6 +1714,16 @@ def login_page():
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <div class='access-support'>
+            <div class='access-support-item'><b>ⓘ Ayuda</b><br>Disponible después de ingresar, desde el menú lateral.</div>
+            <div class='access-support-item'><b>✉ Contacto</b><br><a href='mailto:maaraos@gmail.com'>maaraos@gmail.com</a></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
         
     SHOW_LICENSE_CARDS = False
     
