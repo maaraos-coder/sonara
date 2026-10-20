@@ -6,7 +6,7 @@ transcritas de forma cerrada se mantienen separadas de los auxiliares físicos
 que todavía deberán contrastarse con casos de referencia.
 
 Las funciones trabajan en unidades SI y no asignan clases de vivienda: esa
-interpretación corresponde al alumno usando la norma aplicable.
+interpretación corresponde al usuario aplicando la norma pertinente.
 """
 
 from __future__ import annotations
@@ -153,6 +153,49 @@ def radiation_loss_factor(
     )
 
 
+def porous_absorption_coefficients(
+    flow_resistivity_pa_s_m2: float,
+    thickness_m: float,
+    frequencies: Iterable[float],
+    air_gap_m: float = 0.0,
+) -> np.ndarray:
+    """Estimate normal-incidence absorption of a rigidly backed porous layer.
+
+    The calculation uses a Miki-type equivalent-fluid impedance model.  The
+    catalogue supplies flow resistivity and thickness, not measured alpha
+    spectra, so callers must expose the result as a physical estimate.
+    """
+    sigma = max(float(flow_resistivity_pa_s_m2), 100.0)
+    depth = max(float(thickness_m), 1e-4)
+    gap = max(float(air_gap_m), 0.0)
+    freqs = np.asarray(list(frequencies), dtype=float)
+    safe_freqs = np.maximum(freqs, 1.0)
+    ratio = np.maximum(safe_freqs / sigma, 1e-9)
+    zc = Z0 * (
+        1.0 + 0.070 * ratio ** -0.632
+        - 1j * 0.107 * ratio ** -0.632
+    )
+    k0 = 2.0 * math.pi * safe_freqs / C0
+    kc = k0 * (
+        1.0 + 0.109 * ratio ** -0.618
+        - 1j * 0.160 * ratio ** -0.618
+    )
+    if gap > 0.0:
+        gap_tangent = np.tan(k0 * gap)
+        gap_tangent = np.where(np.abs(gap_tangent) < 1e-9, 1e-9, gap_tangent)
+        load = -1j * Z0 / gap_tangent
+        layer_tangent = np.tan(kc * depth)
+        denominator = zc + 1j * load * layer_tangent
+        denominator = np.where(np.abs(denominator) < 1e-20, 1e-20 + 0j, denominator)
+        surface_impedance = zc * (load + 1j * zc * layer_tangent) / denominator
+    else:
+        tangent = np.tan(kc * depth)
+        tangent = np.where(np.abs(tangent) < 1e-12, 1e-12 + 0j, tangent)
+        surface_impedance = -1j * zc / tangent
+    reflection = (surface_impedance - Z0) / (surface_impedance + Z0)
+    return np.clip(1.0 - np.abs(reflection) ** 2, 0.0, 0.999)
+
+
 def resonant_tl_2022(
     frequency_hz: float,
     plate: PlateProperties,
@@ -247,6 +290,8 @@ def double_leaf_tl(
     configuration: str = "Montante simple",
     absorbent: str = "Sin absorbente",
     fastener_spacing_mm: float = 600.0,
+    absorbent_properties: dict | None = None,
+    connection_properties: dict | None = None,
 ) -> tuple[np.ndarray, PlateProperties, PlateProperties, np.ndarray, float]:
     """Main two-leaf prediction using the physical MAM resonance solver."""
     freqs = np.asarray(list(frequencies), dtype=float)
@@ -258,12 +303,24 @@ def double_leaf_tl(
     )
     f0 = float(resonances[0])
     upper = C0 / (2.0 * math.pi * depth)
-    absorbent_gain = {
+    generic_absorbent_gain = {
         "Sin absorbente": 0.0,
         "Lana mineral 40 kg/m³": 1.5,
         "Lana mineral 60 kg/m³": 3.0,
         "Lana mineral 80 kg/m³": 4.5,
     }.get(absorbent, 0.0)
+    absorbent_gain = np.full_like(freqs, generic_absorbent_gain, dtype=float)
+    if absorbent_properties:
+        absorber_depth = max(float(absorbent_properties.get("thickness_m") or 0.0), 1e-4)
+        fill_ratio = min(absorber_depth / depth, 1.0)
+        alpha = porous_absorption_coefficients(
+            absorbent_properties.get("flow_resistivity_pa_s_m2", 10000.0),
+            absorber_depth,
+            freqs,
+            air_gap_m=max(depth - absorber_depth, 0.0),
+        )
+        absorbent_gain = 4.5 * np.sqrt(alpha) * math.sqrt(fill_ratio)
+
     frame_gain = {
         "Montante simple": -2.0,
         "Montantes independientes": 1.5,
@@ -272,6 +329,30 @@ def double_leaf_tl(
     spacing_penalty = 0.0
     if configuration == "Montante simple":
         spacing_penalty = -max(0.0, 600.0 - float(fastener_spacing_mm)) / 300.0
+
+    resonant_frame = False
+    if connection_properties:
+        label = str(connection_properties.get("display_name") or connection_properties.get("name") or "").lower()
+        category = str(connection_properties.get("category") or "").lower()
+        spacing_m = connection_properties.get("defined_stud_spacing_m")
+        spacing_m = max(float(spacing_m or fastener_spacing_mm * 1e-3), 0.1)
+        stud_width = max(float(connection_properties.get("stud_width_m") or 0.0), 0.0)
+        bridge_ratio = min(stud_width / spacing_m, 0.5)
+        attenuation = max(float(connection_properties.get("attenuation_factor") or 1.0), 1.0)
+        if "independ" in label or "double" in label or "doble" in label:
+            frame_gain = 2.5
+        elif "timber" in category or "madera" in label:
+            frame_gain = -1.0
+        elif "metal" in category or "metál" in label or "metal" in label:
+            frame_gain = 0.5
+        elif "masonry" in category or "albañ" in label:
+            frame_gain = -2.0
+        else:
+            frame_gain = -0.5
+        spacing_penalty = 10.0 * math.log10(min(spacing_m / 0.6, 2.0))
+        spacing_penalty -= 16.0 * bridge_ratio
+        frame_gain += min(10.0 * math.log10(attenuation), 8.0)
+        resonant_frame = bool(connection_properties.get("resonant_transmission"))
 
     equivalent = PlateProperties(
         left.surface_mass + right.surface_mass,
@@ -293,12 +374,14 @@ def double_leaf_tl(
             value = low[index]
         elif frequency < upper:
             value = left_tl[index] + right_tl[index] + 20.0 * math.log10(max(frequency * depth, 1e-12)) - 29.0
-            value += absorbent_gain
+            value += absorbent_gain[index]
         else:
-            value = left_tl[index] + right_tl[index] + 6.0 + 0.35 * absorbent_gain
+            value = left_tl[index] + right_tl[index] + 6.0 + 0.35 * absorbent_gain[index]
         # Broad physical dip around the first MAM mode.
         distance = math.log2(max(frequency, 1e-9) / f0)
         value -= 6.0 * math.exp(-0.5 * (distance / 0.35) ** 2)
+        if resonant_frame:
+            value -= 2.5 * math.exp(-0.5 * (distance / 0.55) ** 2)
         result[index] = value + frame_gain + spacing_penalty
     return np.maximum(result, 0.0), left, right, resonances, upper
 
