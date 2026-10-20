@@ -11,6 +11,13 @@ import hashlib
 import html
 import secrets
 
+from descriptor_optimizer import (
+    canonical_descriptor as canonical_design_descriptor,
+    default_direction as descriptor_default_direction,
+    descriptor_family as design_descriptor_family,
+    rank_solutions as rank_design_solutions,
+)
+
 from academy_access import (
     academy_bridge_configured,
     academy_student_by_email,
@@ -68,7 +75,7 @@ from iso12354_engine import (
 # Motor físico principal SONARA-PHYSICS
 # =========================================================
 
-APP_VERSION = "BETA 0.13 · CATÁLOGO FÍSICO + ISO 12354 + RAIN"
+APP_VERSION = "BETA 0.14 · OPTIMIZACIÓN POR DESCRIPTOR + ISO 12354"
 
 DATA_DIR = Path("data")
 ASSETS_DIR = Path("assets")
@@ -2530,6 +2537,10 @@ def solution_descriptor_value(solution, indicador):
         "lntw": "lntw",
         "ln,w": "lnw",
         "lnw": "lnw",
+        "laeq": "laeq_nt",
+        "laeq,nt": "laeq_nt",
+        "lafmax": "lafmax_nt",
+        "lafmax,nt": "lafmax_nt",
     }
 
     key = mapping.get(ind)
@@ -6465,6 +6476,69 @@ def app_optimizador():
     if isinstance(selected_req, dict):
         req_label = selected_req.get("label", selected_req.get("nombre", selected_req.get("norma", "")))
 
+    requirement_solutions = selected_req.get("soluciones", []) if isinstance(selected_req, dict) else []
+    requirement_indicator = selected_req.get("indicador", "Rw") if isinstance(selected_req, dict) else "Rw"
+    requirement_target = selected_req.get("valor", 45.0) if isinstance(selected_req, dict) else 45.0
+    requirement_direction = selected_req.get("sentido") if isinstance(selected_req, dict) else None
+    requirement_direction = requirement_direction or descriptor_default_direction(requirement_indicator)
+
+    optimizer_mode = st.radio(
+        "Modo de optimización",
+        ["Comparar descriptor final del proyecto", "Generar variantes del elemento"],
+        horizontal=True,
+        index=0 if requirement_solutions else 1,
+        help="El modo de proyecto compara DnT,w, L'nT,w, fachada o instalaciones. El modo de elemento genera variantes constructivas de Rw.",
+    )
+
+    if optimizer_mode == "Comparar descriptor final del proyecto":
+        st.markdown("### Objetivo de calidad acústica")
+        a, b, c = st.columns(3)
+        indicator = a.text_input("Descriptor", value=str(requirement_indicator), disabled=True)
+        target_value = b.number_input("Objetivo ingresado", value=float(requirement_target or 0), step=1.0)
+        direction = c.selectbox("Sentido favorable", [">=", "<="], index=1 if requirement_direction == "<=" else 0)
+        priority = st.selectbox(
+            "Criterio de selección",
+            ["Mayor desempeño", "Menor costo", "Menor espesor", "Menor masa"],
+            key="descriptor_optimizer_priority",
+        )
+        st.caption(
+            f"Familia detectada: {design_descriptor_family(indicator)}. SONARA compara el valor calculado con el objetivo; "
+            "la clase acústica y el valor de mercado asociado los define el titular o el profesional responsable."
+        )
+        ranked = rank_design_solutions(requirement_solutions, indicator, target_value, direction, priority)
+        if not requirement_solutions:
+            st.warning("Este requerimiento todavía no tiene alternativas calculadas. Diseña y guarda al menos dos soluciones antes de compararlas.")
+            return
+        if not ranked:
+            st.warning(
+                f"Las alternativas guardadas no contienen el descriptor {indicator}. Recalcúlalas con el módulo "
+                f"{design_descriptor_family(indicator)} para obtener el resultado final del proyecto."
+            )
+            return
+        comparison = pd.DataFrame([{
+            "Orden": idx + 1,
+            "Alternativa": row["name"],
+            "Descriptor": indicator,
+            "Resultado": round(row["value"], 1),
+            "Objetivo": f"{direction} {target_value:.1f}",
+            "Margen favorable [dB]": round(row["margin"], 1),
+            "Estado": "Alcanza el objetivo" if row["complies"] else "No alcanza",
+            "Espesor [mm]": round(row["thickness"], 1),
+            "Masa [kg/m²]": round(row["mass"], 1),
+            "Costo ref.": round(row["cost"], 0),
+        } for idx, row in enumerate(ranked)])
+        st.dataframe(comparison, use_container_width=True, hide_index=True)
+        best = ranked[0]
+        st.success(
+            f"Mejor alternativa según {priority}: {best['name']} · {indicator} = {best['value']:.1f} dB · "
+            f"margen {best['margin']:+.1f} dB."
+        )
+        st.info(
+            "Este resultado es una prestación de diseño comparable con el umbral ingresado. "
+            "SONARA no asigna ni recomienda una clase ISO/TS 19488."
+        )
+        return
+
     st.markdown(
         f"""
         <div class='sonara-card' style='margin-bottom:18px;'>
@@ -6493,7 +6567,24 @@ def app_optimizador():
                 except Exception:
                     pass
 
-        target_rw = st.number_input("Rw objetivo [dB]", min_value=20.0, max_value=90.0, value=float(default_target), step=1.0)
+        final_descriptor_key = canonical_design_descriptor(requirement_indicator)
+        target_descriptor = st.number_input(
+            f"{requirement_indicator} objetivo [dB]",
+            min_value=0.0,
+            max_value=120.0,
+            value=float(default_target),
+            step=1.0,
+        )
+        area_sep_opt = float((selected_sol or {}).get("descriptores", {}).get("area_sep", 20.0))
+        vol_rec_opt = float((selected_sol or {}).get("descriptores", {}).get("vol_rec", 51.0))
+        if final_descriptor_key in {"dntw", "dnt_a", "dnt_atr"}:
+            area_sep_opt = st.number_input("Área del separador [m²]", min_value=0.5, value=max(area_sep_opt, 0.5), step=0.5)
+            vol_rec_opt = st.number_input("Volumen receptor [m³]", min_value=1.0, value=max(vol_rec_opt, 1.0), step=1.0)
+            geometry_correction = 10.0 * np.log10(0.32 * vol_rec_opt / area_sep_opt)
+            target_rw = target_descriptor - geometry_correction
+            st.caption(f"Objetivo equivalente preliminar para generar candidatos: Rw ≈ {target_rw:.1f} dB. La decisión final usa {requirement_indicator}.")
+        else:
+            target_rw = target_descriptor
         max_espesor = st.number_input("Espesor máximo [mm]", min_value=20.0, max_value=500.0, value=150.0, step=5.0)
         max_masa = st.number_input("Masa máxima [kg/m²]", min_value=5.0, max_value=800.0, value=80.0, step=5.0)
         area_m2 = st.number_input("Superficie a construir [m²]", min_value=1.0, max_value=10000.0, value=20.0, step=1.0)
@@ -6532,6 +6623,24 @@ def app_optimizador():
                 modo=modo,
             )
 
+        if final_descriptor_key in {"dntw", "dnt_a", "dnt_atr"}:
+            for candidate in results:
+                derived = calculate_airborne_descriptors(
+                    candidate.get("Rw", 0), candidate.get("C", 0), candidate.get("Ctr", 0),
+                    candidate.get("Rw", 0), area_sep_opt, vol_rec_opt, 0.5,
+                )
+                candidate.update(derived)
+            descriptor_rows = rank_design_solutions(
+                results, requirement_indicator, target_descriptor,
+                requirement_direction, prioridad,
+            )
+            results = [row["solution"] | {
+                "cumple": row["complies"],
+                "margen": row["margin"],
+                "descriptor_objetivo": requirement_indicator,
+                "descriptor_resultado": row["value"],
+            } for row in descriptor_rows]
+
         if not results:
             st.warning("No se encontraron variantes. Revisa que exista una solución base o materiales activos.")
             return
@@ -6546,6 +6655,8 @@ def app_optimizador():
         df = pd.DataFrame([{
             "Estrategia": r.get("estrategia", ""),
             "Solución": r.get("nombre", ""),
+            "Descriptor final": r.get("descriptor_objetivo", requirement_indicator),
+            "Resultado final": round(r.get("descriptor_resultado", r.get("Rw", 0)), 1),
             "Rw": round(r.get("Rw", 0), 1),
             "C": round(r.get("C", 0), 1),
             "Ctr": round(r.get("Ctr", 0), 1),
@@ -6570,6 +6681,7 @@ def app_optimizador():
                 <b>{best.get("nombre","")}</b><br>
                 Estrategia: <b>{best.get("estrategia","")}</b><br>
                 Resultado: <b>Rw {best.get("Rw",0):.1f} dB; C {best.get("C",0):+.1f}; Ctr {best.get("Ctr",0):+.1f}</b><br>
+                Prestación final: <b>{best.get('descriptor_objetivo', requirement_indicator)} {best.get('descriptor_resultado', best.get('Rw',0)):.1f} dB</b> · margen favorable <b>{best.get('margen',0):+.1f} dB</b><br>
                 Masa: <b>{best.get("masa",0):.1f} kg/m²</b> · Espesor: <b>{best.get("espesor",0):.1f} mm</b> · Costo ref.: <b>${best.get("costo_estimado",0):,.0f}</b><br>
                 Estado: <span style='color:{estado_color};font-weight:900;'>{'Cumple' if best.get("cumple") else 'No cumple'}</span>
                 </p>
@@ -6604,6 +6716,11 @@ def app_optimizador():
                 "Ctr": ctr_val,
                 "Rw+C": resultado_rw + c_val,
                 "Rw+Ctr": resultado_rw + ctr_val,
+                "dntw": selected_variant.get("dntw"),
+                "dnt_a": selected_variant.get("dnt_a"),
+                "dnt_atr": selected_variant.get("dnt_atr"),
+                "descriptor_final": selected_variant.get("descriptor_objetivo", requirement_indicator),
+                "resultado_final": selected_variant.get("descriptor_resultado", resultado_rw),
                 "masa": selected_variant.get("masa", 0),
                 "espesor": selected_variant.get("espesor", 0),
                 "costo_estimado": selected_variant.get("costo_estimado", 0),
@@ -7601,6 +7718,7 @@ def app_fachada_iso():
         "tipo_calculo": "Fachada ISO 12354-3",
         "resultado_label": f"D2m,nT,Atr {result['dnt_a_tr']:.1f} dB",
         "valor": float(result["dnt_a_tr"]),
+        "d2mntw": float(d_numbers["weighted"]),
         "d2mnt_atr": float(result["dnt_a_tr"]),
         "rw_compuesto": float(result["rw_composite"]),
         "ratr_compuesto": float(result["ratr_composite"]),
@@ -7771,6 +7889,8 @@ def app_instalaciones_iso():
         "resultado_label": f"{descriptor} {result['la_normalized']:.1f} dB(A)",
         "valor": float(result["la_normalized"]),
         "la_normalized": float(result["la_normalized"]),
+        "laeq_nt": None if event_type.startswith("Intermitente") else float(result["la_normalized"]),
+        "lafmax_nt": float(result["la_normalized"]) if event_type.startswith("Intermitente") else None,
         "frecuencias": list(map(float, OCTAVE_EQUIPMENT)),
         "curva": list(map(float, result["lp_normalized"])),
         "descripcion": "Predicción por bandas; clasificación ISO/TS 19488 a cargo del usuario.",
