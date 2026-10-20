@@ -12,6 +12,8 @@ import tempfile
 
 import pandas as pd
 
+from sonara_engine import porous_absorption_coefficients
+
 
 ROOT = Path(__file__).resolve().parent
 CATALOG_DB = ROOT / "data" / "acoustic_catalog.sqlite"
@@ -224,4 +226,122 @@ def floor_cover_spectrum(entity_id: int, frequencies) -> pd.Series:
     if target.min() < source_frequencies.min() or target.max() > source_frequencies.max():
         raise ValueError("Las bandas solicitadas exceden el espectro del revestimiento.")
     return pd.Series(np.interp(target, source_frequencies, source_values), index=target)
+
+
+@lru_cache(maxsize=1)
+def absorption_catalog() -> pd.DataFrame:
+    """Return porous infill products with physical properties from the catalogue."""
+    if not catalog_available():
+        return pd.DataFrame()
+    database = catalog_database_path()
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        frame = pd.read_sql_query(
+            """
+            SELECT e.entity_id, e.name, e.manufacturer, e.category,
+                   MAX(CASE WHEN f.tag='Thickness' THEN f.value_number END) AS thickness_m,
+                   MAX(CASE WHEN f.tag='Density' THEN f.value_number END) AS density_kg_m3,
+                   MAX(CASE WHEN f.tag='Damping' THEN f.value_number END) AS flow_resistivity_pa_s_m2
+            FROM canonical_entities e
+            JOIN fields f USING(entity_id)
+            WHERE e.dataset='Absorption' AND COALESCE(e.archived, 0)=0
+            GROUP BY e.entity_id, e.name, e.manufacturer, e.category
+            HAVING thickness_m > 0 AND flow_resistivity_pa_s_m2 >= 100
+            ORDER BY e.name, e.manufacturer, e.entity_id
+            """,
+            connection,
+        )
+    if frame.empty:
+        return frame
+    manufacturer = frame["manufacturer"].fillna("").astype(str).str.strip()
+    manufacturer = manufacturer.mask(manufacturer.str.lower().isin(["", "empty", "generic", "générique"]), "")
+    frame["display_name"] = frame["name"].fillna("Absorbente sin nombre").astype(str)
+    frame.loc[manufacturer != "", "display_name"] += " · " + manufacturer[manufacturer != ""]
+    duplicated = frame["display_name"].duplicated(keep=False)
+    frame.loc[duplicated, "display_name"] += " · ID " + frame.loc[duplicated, "entity_id"].astype(str)
+    return frame
+
+
+def absorption_properties(entity_id: int) -> dict:
+    """Return one catalogue absorber as a calculation-ready mapping."""
+    frame = absorption_catalog()
+    match = frame.loc[frame["entity_id"] == int(entity_id)]
+    if match.empty:
+        raise KeyError(f"Absorbente de catálogo no encontrado: {entity_id}")
+    row = match.iloc[0]
+    return {
+        "entity_id": int(row["entity_id"]),
+        "name": str(row["display_name"]),
+        "category": str(row.get("category", "") or ""),
+        "thickness_m": float(row["thickness_m"]),
+        "density_kg_m3": float(row["density_kg_m3"]),
+        "flow_resistivity_pa_s_m2": float(row["flow_resistivity_pa_s_m2"]),
+        "source": "SONARA acoustic catalogue",
+    }
+
+
+def porous_absorption_spectrum(entity_id: int, frequencies, air_gap_m: float = 0.0) -> pd.Series:
+    """Estimate alpha(f) from catalogue thickness and flow resistivity."""
+    import numpy as np
+
+    target = np.asarray(frequencies, dtype=float)
+    properties = absorption_properties(int(entity_id))
+    values = porous_absorption_coefficients(
+        properties["flow_resistivity_pa_s_m2"],
+        properties["thickness_m"],
+        target,
+        air_gap_m=air_gap_m,
+    )
+    return pd.Series(values, index=target)
+
+
+@lru_cache(maxsize=1)
+def connection_catalog() -> pd.DataFrame:
+    """Return connection and stud records with structural calculation fields."""
+    if not catalog_available():
+        return pd.DataFrame()
+    database = catalog_database_path()
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        frame = pd.read_sql_query(
+            """
+            SELECT e.entity_id, e.dataset, e.name, e.manufacturer, e.category,
+                   p.connection_code, p.stud_depth_m, p.stud_width_m,
+                   p.material_thickness_m, p.frame_mass_raw, p.frame_stiffness_raw,
+                   p.frame_damping, p.cavity_width_m, p.defined_stud_spacing_m,
+                   p.brace_spacing_m, p.pitch_degrees, p.attenuation_factor,
+                   p.resonant_transmission, p.no_absorption
+            FROM canonical_entities e
+            JOIN connection_properties p USING(entity_id)
+            WHERE e.dataset IN ('Connections', 'Stud') AND COALESCE(e.archived, 0)=0
+            ORDER BY e.dataset, e.name, e.manufacturer, e.entity_id
+            """,
+            connection,
+        )
+    if frame.empty:
+        return frame
+    manufacturer = frame["manufacturer"].fillna("").astype(str).str.strip()
+    manufacturer = manufacturer.mask(manufacturer.str.lower().isin(["", "empty", "generic", "générique"]), "")
+    frame["display_name"] = frame["name"].fillna("Conexión sin nombre").astype(str)
+    frame.loc[manufacturer != "", "display_name"] += " · " + manufacturer[manufacturer != ""]
+    duplicated = frame["display_name"].duplicated(keep=False)
+    frame.loc[duplicated, "display_name"] += " · ID " + frame.loc[duplicated, "entity_id"].astype(str)
+    return frame
+
+
+def connection_properties(entity_id: int) -> dict:
+    """Return one connection/stud record without NaN values."""
+    frame = connection_catalog()
+    match = frame.loc[frame["entity_id"] == int(entity_id)]
+    if match.empty:
+        raise KeyError(f"Conexión de catálogo no encontrada: {entity_id}")
+    row = match.iloc[0]
+    result = {}
+    for key, value in row.to_dict().items():
+        if pd.isna(value):
+            result[key] = None
+        elif hasattr(value, "item"):
+            result[key] = value.item()
+        else:
+            result[key] = value
+    result["source"] = "SONARA acoustic catalogue"
+    return result
 
