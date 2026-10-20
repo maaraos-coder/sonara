@@ -472,7 +472,7 @@ def rainfall_material_spectrum(density, thickness, youngs_modulus, poisson,
     """Research-mode plate response driven by the kinetic rain-energy flux.
 
     Extracted material properties drive mass, bending stiffness, coincidence
-    and damping. The output is a prediction, never labelled as laboratory data.
+    and damping. The output is a prediction, never labelled as measured data.
     """
     rho = max(float(density), 1.0)
     h = max(float(thickness), 1e-5)
