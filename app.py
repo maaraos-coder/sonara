@@ -493,33 +493,48 @@ header { visibility: visible; }
 .access-support {
     display: flex;
     justify-content: center;
-    gap: 14px;
-    flex-wrap: wrap;
-    margin: 22px auto 4px;
+    margin: 20px auto 4px;
 }
 
-.access-support-item {
-    min-width: 260px;
-    padding: 13px 18px;
+.contact-disclosure {
+    width: min(320px, 100%);
+    padding: 0;
     border: 1px solid rgba(124,190,255,.28);
     border-radius: 12px;
     background: rgba(8,18,32,.72);
-    color: #DCEBFF !important;
-    font-size: 14px;
-    line-height: 1.5;
+    overflow: hidden;
 }
 
-.access-support-item b {
+.contact-disclosure summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px 18px;
     color: #FFFFFF !important;
+    font-size: 15px;
+    font-weight: 800;
+    text-align: center;
 }
 
-.access-support-item a {
+.contact-disclosure summary::-webkit-details-marker {
+    display: none;
+}
+
+.contact-disclosure[open] summary {
+    border-bottom: 1px solid rgba(124,190,255,.18);
+}
+
+.contact-email {
+    padding: 13px 18px 15px;
+    text-align: center;
+}
+
+.contact-email a {
     color: #5EB7FF !important;
     font-weight: 800;
     text-decoration: none;
 }
 
-.access-support-item a:hover {
+.contact-email a:hover {
     text-decoration: underline;
 }
 
@@ -1718,8 +1733,10 @@ def login_page():
     st.markdown(
         """
         <div class='access-support'>
-            <div class='access-support-item'><b>ⓘ Ayuda</b><br>Disponible después de ingresar, desde el menú lateral.</div>
-            <div class='access-support-item'><b>✉ Contacto</b><br><a href='mailto:maaraos@gmail.com'>maaraos@gmail.com</a></div>
+            <details class='contact-disclosure'>
+                <summary>✉ Contacto</summary>
+                <div class='contact-email'><a href='mailto:maaraos@gmail.com'>maaraos@gmail.com</a></div>
+            </details>
         </div>
         """,
         unsafe_allow_html=True,
