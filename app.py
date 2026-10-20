@@ -2397,6 +2397,63 @@ def cavity_html(camara, absorbente_tipo, configuracion):
     )
 
 
+
+def double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data=None):
+    """Horizontal schematic section with separated or shared framing."""
+    depth = max(float(cavity or 1), 1)
+    independent = configuration in ("Montantes independientes", "Doble estructura")
+    filled = absorber not in (None, "", "Sin absorbente")
+    thickness = float((absorber_data or {}).get("thickness_m") or 0) * 1000
+    parts = [
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 320' role='img' aria-label='Corte horizontal del panel' style='display:block;width:100%;height:auto'>",
+        "<defs><pattern id='section-wool' width='9' height='9' patternUnits='userSpaceOnUse'><rect width='9' height='9' fill='#514323'/><path d='M-2 9 L9 -2 M7 11 L11 7' stroke='#d4b24a' stroke-width='2'/></pattern></defs>",
+        "<text x='180' y='18' text-anchor='middle' fill='#8fd0ff' font-size='12'>Corte horizontal · esquema</text>",
+        "<text x='180' y='42' text-anchor='middle' fill='white' font-size='11'>Cara emisora</text>",
+        "<rect x='24' y='80' width='312' height='160' fill='#0b2336' stroke='#60a5fa' stroke-dasharray='4 3'/>",
+    ]
+    if filled:
+        height = 158 * min(thickness / depth, 1) if thickness > 0 else 158
+        parts.append(f"<rect x='25' y='81' width='310' height='{height:.2f}' fill='url(#section-wool)'/>")
+    def profile(x, y1, y2, reverse=False):
+        flange = -20 if reverse else 20
+        return f"<path d='M{x+flange} {y1} H{x} V{y2} H{x+flange}' fill='none' stroke='#e2e8f0' stroke-width='5'/>"
+    for x in (78, 260):
+        if independent:
+            parts.append(profile(x, 80, 148))
+            parts.append(profile(x+20, 172, 240, True))
+        else:
+            parts.append(profile(x, 80, 240))
+    for layers, edge, direction in ((left, 80, -1), (right, 240, 1)):
+        band = min(9, 26/max(len(layers or []), 1))
+        for i, layer in enumerate(layers or []):
+            color = sonara_html_escape(layer.get("material", {}).get("color", "#9ca3af"))
+            y = edge+i*band if direction > 0 else edge-(i+1)*band
+            parts.append(f"<rect x='24' y='{y:.2f}' width='312' height='{band:.2f}' fill='{color}' stroke='#e5e7eb' stroke-width='.8'/>")
+    label = "Dos estructuras separadas" if independent else "Estructura compartida"
+    fill_label = "Con absorbente" if filled else "Aire sin absorbente"
+    parts.extend([
+        "<rect x='105' y='137' width='150' height='42' rx='5' fill='#03070d' opacity='.93'/>",
+        f"<text x='180' y='154' text-anchor='middle' fill='white' font-size='11'>Cámara: {depth:g} mm</text>",
+        f"<text x='180' y='171' text-anchor='middle' fill='#8fd0ff' font-size='10'>{fill_label}</text>",
+        "<text x='180' y='282' text-anchor='middle' fill='white' font-size='11'>Cara receptora</text>",
+        f"<text x='180' y='306' text-anchor='middle' fill='#8fd0ff' font-size='11'>{label}</text>",
+        "</svg>",
+    ])
+    details = []
+    for title, layers in (("Emisor", left), ("Receptor", right)):
+        names = " + ".join(f"{sonara_html_escape(l.get('nombre', 'Placa'))} ({float(l.get('espesor', 0)):g} mm)" for l in layers or [])
+        details.append(f"<div><b>{title}:</b> {names}</div>")
+    if filled:
+        if thickness > 0:
+            details.append(f"<div>Absorbente: {thickness:g} mm · aire restante: {max(depth-thickness, 0):g} mm.</div>")
+            if thickness > depth:
+                details.append("<div>El absorbente seleccionado supera el espesor de cámara.</div>")
+        else:
+            details.append("<div>Espesor del absorbente sin definir; relleno simbólico.</div>")
+    details.append("<div>Sin escala. Perfiles esquemáticos; su forma no reproduce el producto del catálogo.</div>")
+    return "".join(parts) + "<div style='font-size:11px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
+
+
 def structural_visual(
     tipo,
     mat1=None,
@@ -2411,17 +2468,18 @@ def structural_visual(
     tipo_ventana=None,
     absorbente_tipo="Sin absorbente",
     connection_name=None,
+    absorbent_data=None,
 ):
-    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo · v3</div>"
+    html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo</div>"
     html += "<div style='display:flex;align-items:center;justify-content:center;min-height:230px;padding:12px;'>"
 
     if tipo == "Panel simple":
         html += layers_html(layers_left or [])
 
     elif tipo == "Panel doble":
-        html += layers_html(layers_left or [])
-        html += cavity_html(camara, absorbente_tipo, configuracion)
-        html += layers_html(layers_right or [])
+        html += "<div style='width:100%;min-width:0'>" + double_panel_section_html(
+            layers_left, layers_right, camara, configuracion, absorbente_tipo, absorbent_data
+        ) + "</div>"
 
     else:
         if tipo_ventana == "DVH":
@@ -3000,6 +3058,7 @@ def app_calculator():
                 tipo_ventana=tipo_ventana,
                 absorbente_tipo=absorbente_tipo,
                 connection_name=connection_data.get("display_name") if connection_data else None,
+                absorbent_data=absorbent_data,
             ),
             unsafe_allow_html=True,
         )
