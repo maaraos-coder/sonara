@@ -2418,9 +2418,9 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     parts = [
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 350' role='img' aria-label='Esquema con placas verticales y perfiles en planta' style='display:block;width:100%;height:auto'>",
         "<defs><pattern id='section-wool' width='9' height='9' patternUnits='userSpaceOnUse'><rect width='9' height='9' fill='#514323'/><path d='M-2 9 L9 -2 M7 11 L11 7' stroke='#d4b24a' stroke-width='2'/></pattern></defs>",
-        "<text x='160' y='20' text-anchor='middle' fill='#8fd0ff' font-size='12'>Esquema constructivo</text>",
-        "<text x='64' y='44' text-anchor='middle' fill='white' font-size='12'>Emisor</text>",
-        "<text x='256' y='44' text-anchor='middle' fill='white' font-size='12'>Receptor</text>",
+        "<text x='160' y='20' text-anchor='middle' fill='#8fd0ff' font-size='20' font-weight='600'>Esquema constructivo</text>",
+        "<text x='64' y='44' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Emisor</text>",
+        "<text x='256' y='44' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Receptor</text>",
         f"<g transform='translate({cavity_x:.4f} 0) scale({cavity_width/160:.6f} 1) translate(-80 0)'>",
         "<rect x='80' y='60' width='160' height='240' fill='#0b2336' stroke='#60a5fa' stroke-dasharray='4 3'/>",
     ]
@@ -2455,10 +2455,10 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
             parts.append(f"<rect x='{x:.4f}' y='60' width='{band:.4f}' height='240' fill='{color}' stroke='#e5e7eb' stroke-width='.6'><title>{name}: {layer_mm:g} mm</title></rect>")
             offset += band
     parts.extend([
-        "<rect x='92' y='176' width='136' height='39' rx='5' fill='#03070d' opacity='.94'/>",
-        f"<text x='160' y='192' text-anchor='middle' fill='white' font-size='12'>Cámara: {depth:g} mm</text>",
-        f"<text x='160' y='207' text-anchor='middle' fill='#8fd0ff' font-size='11'>{'Absorbente' if filled else 'Aire'}</text>",
-        f"<text x='160' y='329' text-anchor='middle' fill='#8fd0ff' font-size='12'>{label}</text>",
+        "<rect x='48' y='168' width='224' height='62' rx='5' fill='#03070d' opacity='.94'/>",
+        f"<text x='160' y='193' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Cámara: {depth:g} mm</text>",
+        f"<text x='160' y='217' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{'Absorbente' if filled else 'Aire'}</text>",
+        f"<text x='160' y='329' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{label}</text>",
         "</svg>",
     ])
     details = []
@@ -2473,7 +2473,7 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
         else:
             details.append("<div>Espesor del absorbente sin definir; relleno simbólico.</div>")
     details.append("<div>Vista girada del corte en planta. Espesores proporcionales con ajuste al ancho disponible. Perfiles esquemáticos.</div>")
-    return "".join(parts) + "<div style='font-size:11px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
+    return "".join(parts) + "<div style='font-size:14px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
 
 
 def structural_visual(
