@@ -2452,7 +2452,7 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
             band = layer_mm * scale
             x = edge + offset if direction > 0 else edge - offset - band
             name = sonara_html_escape(layer.get("nombre", "Placa"))
-            parts.append(f"<rect x='{x:.4f}' y='60' width='{band:.4f}' height='240' fill='{color}' stroke='#e5e7eb' stroke-width='.6'><title>{name}: {layer_mm:g} mm</title></rect>")
+            parts.append(f"<rect x='{x:.4f}' y='60' width='{band:.4f}' height='340' fill='{color}' stroke='#e5e7eb' stroke-width='.6'><title>{name}: {layer_mm:g} mm</title></rect>")
             offset += band
     parts.extend([
         f"<text x='160' y='430' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{label}</text>",
