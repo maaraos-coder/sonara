@@ -2416,32 +2416,32 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     double = configuration == "Doble estructura"
     label = "Doble estructura independiente" if double else ("Montantes alternados" if staggered else "Estructura compartida")
     parts = [
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 350' role='img' aria-label='Esquema con placas verticales y perfiles en planta' style='display:block;width:100%;height:auto'>",
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 450' role='img' aria-label='Esquema con placas verticales y perfiles en planta' style='display:block;width:100%;height:auto'>",
         "<defs><pattern id='section-wool' width='9' height='9' patternUnits='userSpaceOnUse'><rect width='9' height='9' fill='#514323'/><path d='M-2 9 L9 -2 M7 11 L11 7' stroke='#d4b24a' stroke-width='2'/></pattern></defs>",
         "<text x='160' y='20' text-anchor='middle' fill='#8fd0ff' font-size='20' font-weight='600'>Esquema constructivo</text>",
         "<text x='64' y='44' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Emisor</text>",
         "<text x='256' y='44' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Receptor</text>",
         f"<g transform='translate({cavity_x:.4f} 0) scale({cavity_width/160:.6f} 1) translate(-80 0)'>",
-        "<rect x='80' y='60' width='160' height='240' fill='#0b2336' stroke='#60a5fa' stroke-dasharray='4 3'/>",
+        "<rect x='80' y='60' width='160' height='340' fill='#0b2336' stroke='#60a5fa' stroke-dasharray='4 3'/>",
     ]
     if filled:
         fill_width = 158 * min(thickness / depth, 1) if thickness > 0 else 158
-        parts.append(f"<rect x='81' y='61' width='{fill_width:.2f}' height='238' fill='url(#section-wool)'/>")
+        parts.append(f"<rect x='81' y='61' width='{fill_width:.2f}' height='338' fill='url(#section-wool)'/>")
     def profile(x1, x2, y, reverse=False):
         flange = -17 if reverse else 17
         return f"<path d='M{x1} {y+flange} V{y} H{x2} V{y+flange}' fill='none' stroke='#e2e8f0' stroke-width='4' stroke-linejoin='round'/>"
     if double:
-        for y in (100, 250):
+        for y in (110, 340):
             parts.append(profile(80, 145, y))
             parts.append(profile(175, 240, y, True))
-        parts.append("<path d='M160 64 V296' stroke='#8fd0ff' stroke-width='1' stroke-dasharray='4 4'/>")
+        parts.append("<path d='M160 64 V396' stroke='#8fd0ff' stroke-width='1' stroke-dasharray='4 4'/>")
     elif staggered:
-        for y in (90, 230):
+        for y in (100, 310):
             parts.append(profile(80, 190, y))
-        for y in (150, 290):
+        for y in (180, 380):
             parts.append(profile(130, 240, y, True))
     else:
-        for y in (100, 250):
+        for y in (110, 340):
             parts.append(profile(80, 240, y))
     parts.append("</g>")
     for layers, edge, direction in ((left, cavity_x, -1), (right, cavity_end, 1)):
@@ -2455,13 +2455,10 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
             parts.append(f"<rect x='{x:.4f}' y='60' width='{band:.4f}' height='240' fill='{color}' stroke='#e5e7eb' stroke-width='.6'><title>{name}: {layer_mm:g} mm</title></rect>")
             offset += band
     parts.extend([
-        "<rect x='48' y='168' width='224' height='62' rx='5' fill='#03070d' opacity='.94'/>",
-        f"<text x='160' y='193' text-anchor='middle' fill='white' font-size='20' font-weight='600'>Cámara: {depth:g} mm</text>",
-        f"<text x='160' y='217' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{'Absorbente' if filled else 'Aire'}</text>",
-        f"<text x='160' y='329' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{label}</text>",
+        f"<text x='160' y='430' text-anchor='middle' fill='#8fd0ff' font-size='18' font-weight='600'>{label}</text>",
         "</svg>",
     ])
-    details = []
+    details = [f"<div style='text-align:center;margin:0 0 14px;color:#8fd0ff;font-weight:600'>Cámara: {depth:g} mm · {'Absorbente' if filled else 'Aire'}</div>"]
     for title, layers in (("Emisor", left), ("Receptor", right)):
         names = " + ".join(f"{sonara_html_escape(l.get('nombre', 'Placa'))} ({float(l.get('espesor', 0)):g} mm)" for l in layers or [])
         details.append(f"<div><b>{title}:</b> {names}</div>")
@@ -2493,7 +2490,7 @@ def structural_visual(
     absorbent_data=None,
 ):
     html = "<div class='sonara-card'><div class='sonara-card-title'>Visual constructivo</div>"
-    html += "<div style='display:flex;align-items:center;justify-content:center;min-height:230px;padding:12px;'>"
+    html += "<div style='display:flex;align-items:center;justify-content:center;min-height:230px;padding:12px 0;min-width:0;'>"
 
     if tipo == "Panel simple":
         html += layers_html(layers_left or [])
