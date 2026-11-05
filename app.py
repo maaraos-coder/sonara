@@ -2488,8 +2488,8 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     return "".join(parts) + "<div style='font-size:14px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
 
 
-def constructive_image_svg(tipo, left, right, cavity, configuration, absorber, absorber_data, window_type):
-    """Exporta el corte y la composición como una imagen vectorial autónoma."""
+def constructive_image_svg(tipo, left, right, cavity, configuration, absorber, absorber_data, window_type, cards):
+    """Exporta el corte constructivo y los resultados en una sola imagen."""
     if tipo == "Panel doble":
         section = double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data)
     elif tipo == "Ventana" and window_type == "DVH":
@@ -2522,18 +2522,31 @@ def constructive_image_svg(tipo, left, right, cavity, configuration, absorber, a
     if tipo == "Panel doble" and absorber not in (None, "", "Sin absorbente"):
         thickness_mm = float((absorber_data or {}).get("thickness_m") or 0) * 1000
         rows.append(f"Absorbente · {absorber}" + (f" · {thickness_mm:g} mm" if thickness_mm else ""))
-    legend = [line for row in rows for line in textwrap.wrap(row, width=70)]
-    height = 495 + len(legend) * 21
+    legend = [line for row in rows for line in textwrap.wrap(row, width=46)]
+    height = 535 + len(legend) * 20
     labels = "".join(
-        f"<text x='24' y='{467 + index * 21}'>{sonara_html_escape(line)}</text>"
+        f"<text x='40' y='{498 + index * 20}'>{sonara_html_escape(line)}</text>"
         for index, line in enumerate(legend)
     )
+    tiles = []
+    for index, (label, value, unit) in enumerate(cards):
+        x, y = 460 + (index % 3) * 171, 75 + (index // 3) * 152
+        size = 25 if len(value) > 6 else 36
+        tiles.append(
+            f"<g transform='translate({x} {y})'>"
+            "<rect width='157' height='138' rx='14' fill='#0a2035' stroke='#24597f'/>"
+            f"<text x='14' y='32' fill='#8fd0ff' font-size='15' font-weight='700'>{sonara_html_escape(label)}</text>"
+            f"<text x='14' y='82' fill='white' font-size='{size}' font-weight='700'>{sonara_html_escape(value)}</text>"
+            f"<text x='14' y='112' fill='#8fd0ff' font-size='15'>{sonara_html_escape(unit)}</text></g>"
+        )
     return (
-        f"<svg xmlns='http://www.w3.org/2000/svg' width='640' height='{height}' viewBox='0 0 640 {height}'>"
-        f"<rect width='640' height='{height}' fill='#081829'/>"
-        f"<svg x='160' y='0' width='320' height='450' viewBox='0 0 320 450' font-family='sans-serif'>"
-        f"{section.split('>', 1)[1]}"
-        f"<g fill='#e5efff' font-family='sans-serif' font-size='15'>{labels}</g></svg>"
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='1000' height='{height}' viewBox='0 0 1000 {height}' font-family='sans-serif'>"
+        f"<rect width='1000' height='{height}' fill='#081829'/>"
+        f"<rect x='20' y='20' width='410' height='{height - 40}' rx='16' fill='#0a2035' stroke='#24597f'/>"
+        "<text x='40' y='53' fill='white' font-size='22' font-weight='700'>Visual constructivo</text>"
+        "<text x='460' y='53' fill='white' font-size='22' font-weight='700'>Resultados del cálculo</text>"
+        f"<svg x='65' y='60' width='320' height='420' viewBox='0 0 320 450'>{section.split('>', 1)[1]}"
+        f"<g fill='#e5efff' font-size='14'>{labels}</g>{''.join(tiles)}</svg>"
     ).encode("utf-8")
 
 
@@ -3141,6 +3154,14 @@ def app_calculator(project=None, requirement=None):
         "TL/R [dB]": np.round(tl, 1),
     })
 
+    result_cards = [
+        (descriptor_name, f"{descriptor_value:.0f}", "dB"),
+        ("Rw / C / Ctr", f"{rw}/{c}/{ctr}", "dB"),
+        ("STC", str(stc), "estimado"),
+        ("Masa", f"{masa:.1f}", "kg/m²"),
+        ("Fc", f"{fc:.0f}", "Hz"),
+    ]
+
     with col_visual:
         st.markdown(
             structural_visual(
@@ -3158,47 +3179,27 @@ def app_calculator(project=None, requirement=None):
         )
 
         st.download_button(
-            "Descargar imagen del elemento (SVG)",
+            "Descargar visual y resultados (SVG)",
             data=constructive_image_svg(
                 tipo, layers_left, layers_right, camara, configuracion,
-                absorbente_tipo, absorbent_data, tipo_ventana,
+                absorbente_tipo, absorbent_data, tipo_ventana, result_cards,
             ),
-            file_name="sonara_elemento_constructivo.svg",
+            file_name="sonara_visual_y_resultados.svg",
             mime="image/svg+xml",
             key="download_constructive_image",
         )
 
     with col_results:
+        tiles = "".join(
+            '<div class="result-card">'
+            f'<div class="result-label">{sonara_html_escape(label)}</div>'
+            f"""<div class="result-value" style="{'font-size:30px;' if index == 1 else ''}">{sonara_html_escape(value)}</div>"""
+            f'<div class="result-unit">{sonara_html_escape(unit)}</div></div>'
+            for index, (label, value, unit) in enumerate(result_cards)
+        )
         st.markdown(
-            f"""
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
-                <div class="result-card">
-                    <div class="result-label">{descriptor_name}</div>
-                    <div class="result-value">{descriptor_value:.0f}</div>
-                    <div class="result-unit">dB</div>
-                </div>
-                <div class="result-card">
-                    <div class="result-label">Rw / C / Ctr</div>
-                    <div class="result-value" style="font-size:30px;">{rw}/{c}/{ctr}</div>
-                    <div class="result-unit">dB</div>
-                </div>
-                <div class="result-card">
-                    <div class="result-label">STC</div>
-                    <div class="result-value">{stc}</div>
-                    <div class="result-unit">estimado</div>
-                </div>
-                <div class="result-card">
-                    <div class="result-label">Masa</div>
-                    <div class="result-value">{masa:.1f}</div>
-                    <div class="result-unit">kg/m²</div>
-                </div>
-                <div class="result-card">
-                    <div class="result-label">Fc</div>
-                    <div class="result-value">{fc:.0f}</div>
-                    <div class="result-unit">Hz</div>
-                </div>
-            </div>
-            """,
+            '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">'
+            + tiles + '</div>',
             unsafe_allow_html=True,
         )
 
