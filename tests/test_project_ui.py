@@ -48,6 +48,18 @@ exec(textwrap.dedent(block))
         self.assertEqual(req["valor"], 40)
         self.assertEqual(req["origen"], "personalizado")
 
+    def test_decimal_limit_is_preserved(self):
+        app = self.app()
+        app.selectbox(key="matrix_tipo").select("Reverberación").run()
+        app.radio(key="matrix_requirement_origin").set_value("Personalizado").run()
+        app.text_input(key="matrix_custom_name").set_value("TR de diseño")
+        app.number_input(key="matrix_custom_limit_Reverberación_T").set_value(0.6)
+        app.text_area(key="matrix_custom_source").set_value("Criterio de prueba")
+        app.run()
+        app.button(key="matrix_add").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state["db"]["p"]["requerimientos"][0]["valor"], 0.6)
+
     def test_installation_custom_and_rename(self):
         app = self.app()
         app.selectbox(key="matrix_tipo").select("Instalaciones / HVAC").run()
