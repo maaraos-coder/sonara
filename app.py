@@ -2410,7 +2410,7 @@ def cavity_html(camara, absorbente_tipo, configuracion):
 
 
 
-def double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data=None):
+def double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data=None, *, glazing=False):
     """Vertical leaves drawn with a shared thickness scale in the available width."""
     depth = max(float(cavity or 1), 1)
     left_mm = sum(max(float(layer.get("espesor", 0)), 0) for layer in left or [])
@@ -2426,6 +2426,8 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     staggered = configuration in ("Montantes independientes", "Montantes alternados")
     double = configuration == "Doble estructura"
     label = "Doble estructura independiente" if double else ("Montantes alternados" if staggered else "Estructura compartida")
+    if glazing:
+        label = "Doble vidriado hermético"
     parts = [
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 450' role='img' aria-label='Esquema con placas verticales y perfiles en planta' style='display:block;width:100%;height:auto'>",
         "<defs><pattern id='section-wool' width='9' height='9' patternUnits='userSpaceOnUse'><rect width='9' height='9' fill='#514323'/><path d='M-2 9 L9 -2 M7 11 L11 7' stroke='#d4b24a' stroke-width='2'/></pattern></defs>",
@@ -2441,7 +2443,9 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
     def profile(x1, x2, y, reverse=False):
         flange = -17 if reverse else 17
         return f"<path d='M{x1} {y+flange} V{y} H{x2} V{y+flange}' fill='none' stroke='#e2e8f0' stroke-width='4' stroke-linejoin='round'/>"
-    if double:
+    if glazing:
+        pass
+    elif double:
         for y in (110, 340):
             parts.append(profile(80, 145, y))
             parts.append(profile(175, 240, y, True))
@@ -2482,6 +2486,55 @@ def double_panel_section_html(left, right, cavity, configuration, absorber, abso
             details.append("<div>Espesor del absorbente sin definir; relleno simbólico.</div>")
     details.append("<div>Vista girada del corte en planta. Espesores proporcionales con ajuste al ancho disponible. Perfiles esquemáticos.</div>")
     return "".join(parts) + "<div style='font-size:14px;line-height:1.6;overflow-wrap:anywhere'>" + "".join(details) + "</div>"
+
+
+def constructive_image_svg(tipo, left, right, cavity, configuration, absorber, absorber_data, window_type):
+    """Exporta el corte y la composición como una imagen vectorial autónoma."""
+    if tipo == "Panel doble":
+        section = double_panel_section_html(left, right, cavity, configuration, absorber, absorber_data)
+    elif tipo == "Ventana" and window_type == "DVH":
+        section = double_panel_section_html(
+            left, right, cavity, None, "Sin absorbente", glazing=True
+        )
+    else:
+        total = sum(float(layer["espesor"]) for layer in left)
+        scale = 260 / max(total, 1)
+        x = 30.0
+        parts = []
+        for layer in left:
+            width = float(layer["espesor"]) * scale
+            color = sonara_html_escape(layer["material"].get("color", "#9ca3af"))
+            parts.append(f"<rect x='{x:.3f}' y='60' width='{width:.3f}' height='340' fill='{color}' stroke='#e5e7eb'/>")
+            x += width
+        section = (
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 450' "
+            "font-family='sans-serif'>"
+            "<text x='160' y='24' text-anchor='middle' fill='#8fd0ff' font-size='18'>Esquema constructivo</text>"
+            + "".join(parts) + "</svg>"
+        )
+    section = section.split("</svg>", 1)[0] + "</svg>"
+    rows = []
+    for title, layers in (("Emisor", left), ("Receptor", right)):
+        if layers:
+            rows.extend(f"{title} · {layer.get('nombre', 'Capa')} · {float(layer['espesor']):g} mm" for layer in layers)
+    if tipo == "Panel doble" or (tipo == "Ventana" and window_type == "DVH"):
+        rows.append(f"Cámara · {float(cavity):g} mm")
+    if tipo == "Panel doble" and absorber not in (None, "", "Sin absorbente"):
+        thickness_mm = float((absorber_data or {}).get("thickness_m") or 0) * 1000
+        rows.append(f"Absorbente · {absorber}" + (f" · {thickness_mm:g} mm" if thickness_mm else ""))
+    legend = [line for row in rows for line in textwrap.wrap(row, width=70)]
+    height = 495 + len(legend) * 21
+    labels = "".join(
+        f"<text x='24' y='{467 + index * 21}'>{sonara_html_escape(line)}</text>"
+        for index, line in enumerate(legend)
+    )
+    return (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='640' height='{height}' viewBox='0 0 640 {height}'>"
+        f"<rect width='640' height='{height}' fill='#081829'/>"
+        f"<svg x='160' y='0' width='320' height='450' viewBox='0 0 320 450' font-family='sans-serif'>"
+        f"{section.split('>', 1)[1]}"
+        f"<g fill='#e5efff' font-family='sans-serif' font-size='15'>{labels}</g></svg>"
+    ).encode("utf-8")
 
 
 def structural_visual(
@@ -2793,7 +2846,7 @@ def solution_cubicacion_summary(sol):
     }
 
 
-def app_calculator():
+def app_calculator(project=None, requirement=None):
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>Calculadora</h2>",
         unsafe_allow_html=True,
@@ -3104,6 +3157,17 @@ def app_calculator():
             unsafe_allow_html=True,
         )
 
+        st.download_button(
+            "Descargar imagen del elemento (SVG)",
+            data=constructive_image_svg(
+                tipo, layers_left, layers_right, camara, configuracion,
+                absorbente_tipo, absorbent_data, tipo_ventana,
+            ),
+            file_name="sonara_elemento_constructivo.svg",
+            mime="image/svg+xml",
+            key="download_constructive_image",
+        )
+
     with col_results:
         st.markdown(
             f"""
@@ -3309,7 +3373,11 @@ def app_calculator():
             "absorbent_catalog_properties": absorbent_data,
             "tipo_elemento": tipo,
             "tipo_ventana": tipo_ventana,
-        }, key_prefix="save_airborne")
+        }, key_prefix=f"save_airborne_{(requirement or {}).get('id', 'general')}",
+            target_project_id=(project or {}).get("id"),
+            target_requirement_id=(requirement or {}).get("id"),
+            target_requirement_label=(requirement or {}).get("elemento"),
+        )
 
     with st.expander("Validar predicción con ensayo normalizado o medición", expanded=False):
         st.caption(
@@ -9028,7 +9096,8 @@ def layer_summary(layers):
 
 
 def solution_save_widget(solution, key_prefix="save_solution", *,
-                         target_project_id=None, target_requirement_id=None):
+                         target_project_id=None, target_requirement_id=None,
+                         target_requirement_label=None):
     options = get_project_options()
     if target_project_id is not None:
         options = [(pid, name) for pid, name in options if pid == target_project_id]
@@ -9049,6 +9118,9 @@ def solution_save_widget(solution, key_prefix="save_solution", *,
 
         project_label = st.selectbox("Proyecto destino", labels, index=default_idx, key=f"{key_prefix}_project")
         project_id = ids[labels.index(project_label)]
+
+        if target_requirement_label:
+            st.caption(f"Elemento destino: {target_requirement_label} · disponible en Soluciones.")
 
         nombre_sol = st.text_input(
             "Nombre de la solución",
@@ -9760,7 +9832,7 @@ def app_project_calculator_embedded(project, requirement):
     if calc_mode == "Solución compuesta":
         app_composite_solution(project, objetivo)
     elif calc_mode == "Ruido aéreo":
-        app_calculator()
+        app_calculator(project, objetivo)
     elif calc_mode == "Ruido de impacto":
         app_impacto()
     elif calc_mode == "ISO 12354-1":
