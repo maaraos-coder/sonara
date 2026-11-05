@@ -9874,7 +9874,7 @@ def app_proyectos():
                         indicador_req = st.text_input("Descriptor personalizado", key="matrix_custom_descriptor_text")
                     default_max = tipo_elemento in ("Instalaciones / HVAC", "Reverberación") or indicador_req.startswith(("L'", "Ln"))
                     sentido_req = st.selectbox("Comparación", [">=", "<="], index=1 if default_max else 0, key=f"matrix_custom_direction_{tipo_elemento}_{indicador_req}")
-                    limite_req = st.number_input("Límite requerido", value=None, placeholder="Ingresa el límite", key=f"matrix_custom_limit_{tipo_elemento}_{indicador_req}")
+                    limite_req = st.number_input("Límite requerido", value=None, step=0.1, format="%.2f", placeholder="Ingresa el límite", key=f"matrix_custom_limit_{tipo_elemento}_{indicador_req}")
                     unidad_req = st.text_input("Unidad", value="s" if tipo_elemento == "Reverberación" else "dB", key=f"matrix_custom_unit_{tipo_elemento}")
                     norma_req = st.text_input("Norma o referencia del objetivo", placeholder="Norma, criterio del mandante o ejercicio académico", key="matrix_custom_reference")
                     fuente_req = st.text_area("Fuente, condiciones y justificación", placeholder="Tabla o apartado; condiciones de evaluación y procedencia del límite", key="matrix_custom_source")
