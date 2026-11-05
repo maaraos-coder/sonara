@@ -11,6 +11,7 @@ import hashlib
 import html
 import secrets
 import math
+import os
 
 from descriptor_optimizer import (
     canonical_descriptor as canonical_design_descriptor,
@@ -20,12 +21,14 @@ from descriptor_optimizer import (
 )
 
 from academy_access import (
+    academy_supabase_client,
     academy_bridge_configured,
     academy_student_by_email,
     create_sonara_account,
     sonara_account_by_email,
     update_sonara_account,
 )
+from project_store import CloudProjectStore, ProjectStorageError, account_owner
 from iso_design import (
     OCTAVE_EQUIPMENT,
     THIRD_OCTAVE_100_3150,
@@ -1354,6 +1357,13 @@ def authenticate_user(email, password):
     row = match.iloc[0]
     if not verify_password(password, row.get("password_hash", ""), row.get("salt", "")):
         return False, "Contraseña incorrecta."
+
+    # Migrate a verified legacy account before its private projects use the FK.
+    if academy_bridge_configured():
+        account = {key: str(row.get(key, "") or "") for key in ("password_hash", "salt", "nombre", "empresa", "cargo")}
+        account.update(email=email, estado="active")
+        if not create_sonara_account(account):
+            return False, "No se pudo migrar tu cuenta a Supabase. No se modificaron tus proyectos; intenta nuevamente."
 
     idx = match.index[0]
     users.loc[idx, "last_login"] = datetime.now().isoformat(timespec="seconds")
@@ -8566,7 +8576,42 @@ def migrate_legacy_projects_if_needed(email=None):
     user_file.write_text("{}", encoding="utf-8")
 
 
+def cloud_project_storage_enabled():
+    # Local files are an explicit offline/development mode, never a cloud fallback.
+    return os.getenv("SONARA_PROJECT_STORAGE", "supabase").strip().lower() != "local"
+
+
+def project_storage_failure(exc, pending=None):
+    st.error(str(exc))
+    if pending is not None:
+        st.session_state["project_unsaved_changes"] = pending
+    if st.session_state.get("project_unsaved_changes") is not None:
+        st.download_button("Descargar cambios pendientes de guardar", json.dumps(st.session_state["project_unsaved_changes"], ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"), file_name="sonara_cambios_pendientes.json", mime="application/json", key="project_pending_export")
+    st.stop()
+
+
 def load_projects():
+    if cloud_project_storage_enabled():
+        try:
+            store = CloudProjectStore(academy_supabase_client(), st.session_state)
+            data, revision = store.load()
+            # Import only the private file for the authenticated owner, once.
+            # Never assign the old shared projects.json to a newly signed-in user.
+            owned_file = current_user_project_file(store.owner)
+            if revision == 0 and owned_file.exists():
+                try:
+                    legacy = json.loads(owned_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ProjectStorageError("No se pudo leer tu archivo local para migrarlo. Se conserva el original.") from exc
+                if not isinstance(legacy, dict):
+                    raise ProjectStorageError("Tu archivo local de proyectos no es válido; no se migró.")
+                if legacy:
+                    revision = store.save(legacy, 0)
+                    data = legacy
+            st.session_state.setdefault("project_cloud_revisions", {})[store.owner] = revision
+            return data
+        except ProjectStorageError as exc:
+            project_storage_failure(exc)
     try:
         migrate_legacy_projects_if_needed()
         path = current_user_project_file()
@@ -8579,6 +8624,20 @@ def load_projects():
 
 
 def save_projects(data):
+    if cloud_project_storage_enabled():
+        try:
+            store = CloudProjectStore(academy_supabase_client(), st.session_state)
+            revision = st.session_state.get("project_cloud_revisions", {}).get(store.owner)
+            if revision is None:
+                raise ProjectStorageError("Vuelve a cargar tus proyectos antes de guardar.")
+            payload = json.loads(json.dumps(data, ensure_ascii=False, default=_json_default, allow_nan=False))
+            new_revision = store.save(payload, revision)
+            st.session_state["project_cloud_revisions"][store.owner] = new_revision
+            st.session_state.pop("project_unsaved_changes", None)
+            st.session_state["project_cloud_last_saved"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return
+        except (ProjectStorageError, ValueError, TypeError) as exc:
+            project_storage_failure(exc, pending=data)
     path = current_user_project_file()
     path.parent.mkdir(exist_ok=True)
     path.write_text(
@@ -10147,26 +10206,44 @@ def app_configuracion():
             st.success("Configuración de costos guardada.")
 
     with tabs[4]:
-        st.markdown("<div class='sonara-card-title'>Datos locales</div>", unsafe_allow_html=True)
-        st.markdown(
-            """
-            <div class='result-note'>
-            SONARA guarda localmente usuarios, materiales, configuración y proyectos en la carpeta <b>data/</b>.
-            En una versión web productiva, esto debería migrar a una base de datos por usuario.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        user_projects = current_user_project_file(email)
-        files_to_download = [USERS_CSV, user_projects, MATERIALS_CSV, SETTINGS_JSON]
-        for f in files_to_download:
-            if f.exists():
-                st.download_button(f"⬇ Descargar {f.name}", data=f.read_bytes(), file_name=f.name, use_container_width=True)
-
-        st.markdown(
-            f"<div class='result-note'>Archivo de proyectos del usuario activo: <b>{user_projects}</b></div>",
-            unsafe_allow_html=True
-        )
+        st.markdown("<div class='sonara-card-title'>Proyectos y respaldos de tu cuenta</div>", unsafe_allow_html=True)
+        projects = load_projects()
+        if cloud_project_storage_enabled():
+            st.success("Tus proyectos se guardan en Supabase y se recuperan al iniciar sesión en tu cuenta.")
+            revision = st.session_state.get("project_cloud_revisions", {}).get(account_owner(st.session_state), 0)
+            st.caption(f"Versión recuperada de Supabase: {revision}.")
+        else:
+            st.warning("Modo local: estos proyectos solo existen en este servidor. Descarga un respaldo antes de reiniciarlo o trasladarlo.")
+        st.download_button("⬇ Descargar respaldo de mis proyectos", json.dumps(projects, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"), file_name=f"{safe_user_id(email)}.json", mime="application/json")
+        if cloud_project_storage_enabled():
+            try:
+                store = CloudProjectStore(academy_supabase_client(), st.session_state)
+                versions = store.versions()
+                if versions:
+                    version_id = st.selectbox("Versiones anteriores de mi cuenta", [v["revision"] for v in versions], format_func=lambda rev: next(f"Versión {rev} · {v['created_at']}" for v in versions if v["revision"] == rev))
+                    version_data = store.version(version_id)
+                    st.download_button("⬇ Descargar esta versión", json.dumps(version_data, ensure_ascii=False, indent=2).encode("utf-8"), file_name=f"sonara_version_{version_id}.json", mime="application/json")
+            except ProjectStorageError as exc:
+                st.warning(str(exc))
+        uploaded_backup = st.file_uploader("Recuperar proyectos desde un respaldo JSON", type=["json"], key="project_backup_import")
+        st.caption("La recuperación agrega proyectos que no existen en tu cuenta. No reemplaza proyectos actuales con el mismo identificador.")
+        if st.button("Incorporar proyectos del respaldo", disabled=uploaded_backup is None):
+            try:
+                recovered = json.loads(uploaded_backup.getvalue().decode("utf-8-sig"))
+                if not isinstance(recovered, dict) or any(not isinstance(v, dict) for v in recovered.values()):
+                    raise ValueError("El respaldo no contiene un documento válido de proyectos SONARA.")
+                current = load_projects()
+                conflicts = [key for key in recovered if key in current and current[key] != recovered[key]]
+                if conflicts:
+                    raise ValueError("El respaldo contiene proyectos que ya existen y son diferentes. No se reemplazó ningún dato.")
+                save_projects({**current, **recovered})
+                st.success("Proyectos recuperados y guardados.")
+                st.rerun()
+            except (ValueError, UnicodeError) as exc:
+                st.error(str(exc))
+        # Never export the shared users/password file or other users' settings.
+        if MATERIALS_CSV.exists():
+            st.download_button("⬇ Descargar materiales_sonara.csv", MATERIALS_CSV.read_bytes(), file_name=MATERIALS_CSV.name)
 
 
 def app_ayuda():
