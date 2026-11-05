@@ -2709,6 +2709,8 @@ def solution_descriptor_value(solution, indicador):
         "nic": "stc",
         "dnt,w": "dntw",
         "dntw": "dntw",
+        "dnt,50": "dnt50",
+        "dnt50": "dnt50",
         "dnt,a": "dnt_a",
         "dnta": "dnt_a",
         "dnt,atr": "dnt_atr",
@@ -3412,7 +3414,7 @@ def _iso_reference_curve_from_rw(rw):
     return freqs, curve
 
 
-def app_iso12354():
+def app_iso12354(project=None, requirement=None):
     st.markdown(
         "<h2 style='color:#FFFFFF;margin-bottom:18px;'>ISO 12354 — Predicción entre recintos</h2>",
         unsafe_allow_html=True
@@ -3556,6 +3558,11 @@ def app_iso12354():
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("<div class='sonara-card-title'>Elemento separador</div>", unsafe_allow_html=True)
 
+        st.caption(
+            "Obtén el Rw en Ruido aéreo → Panel simple, con el material y espesor del separador, "
+            "o usa el Rw de un ensayo del mismo elemento. Anótalo aquí: este módulo lo usa "
+            "para construir una curva de referencia y predecir el aislamiento entre recintos."
+        )
         rw_direct = st.number_input(
             "Rw elemento separador [dB]",
             value=45.0,
@@ -4024,6 +4031,42 @@ def app_iso12354():
             mime="text/csv",
             use_container_width=True
         )
+
+    if project and requirement and project.get("id") and requirement.get("id"):
+        notes = st.text_area(
+            "Fuente del Rw, hipótesis y alcance del cálculo",
+            placeholder="Ej.: Panel simple de hormigón de 180 mm, densidad adoptada 2.400 kg/m³.",
+            key=f"iso12354_notes_{project['id']}_{requirement['id']}",
+        )
+        solution_save_widget({
+            "nombre": f"{requirement.get('elemento') or 'ISO 12354-1'} · Predicción",
+            "tipo_calculo": "ISO 12354-1",
+            "resultado_label": (
+                f"DnT,50 {dnt50} dB" if dnt50 is not None else f"DnT,w {dntw} dB"
+            ),
+            "dnt50": dnt50,
+            "dntw": dntw,
+            "dnt_a": dntw + c_dnt,
+            "dnt_atr": dntw + ctr_dnt,
+            "valor": dnt50 if dnt50 is not None else dntw,
+            "descripcion": notes,
+            "objetivo": {key: value for key, value in requirement.items() if key != "soluciones"},
+            "geometria": {
+                "superficie_separador_m2": s_sep,
+                "volumen_receptor_m3": volumen_receptor,
+                "reverberacion_receptor_s": t_receptor,
+                "reverberacion_referencia_s": 0.5,
+            },
+            "separador": {"rw_db": rw_direct, "origen": "Curva de referencia a partir del Rw"},
+            "flancos": [
+                {key: value.tolist() if isinstance(value, np.ndarray) else value
+                 for key, value in flank.items()}
+                for flank in detailed_junctions
+            ],
+            "frecuencias_hz": freqs.tolist(),
+            "dnt_por_banda_db": dnt.tolist(),
+        }, key_prefix=f"save_iso12354_{project['id']}_{requirement['id']}",
+            target_project_id=project["id"], target_requirement_id=requirement["id"])
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -8912,7 +8955,7 @@ def solution_status(solution, objetivo):
 
 
 
-def save_solution_to_project(project_id, solution):
+def save_solution_to_project(project_id, solution, *, requirement_id=None):
     allowed, msg = can_save_solution()
     if not allowed:
         st.error(msg)
@@ -8928,8 +8971,17 @@ def save_solution_to_project(project_id, solution):
     solution["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Guardado nuevo: dentro del requerimiento activo
-    req = active_requirement(project)
-    req_id = st.session_state.get("active_requirement_id") or (req or {}).get("id")
+    if requirement_id is None:
+        req = active_requirement(project)
+        req_id = st.session_state.get("active_requirement_id") or (req or {}).get("id")
+    else:
+        req = next(
+            (item for item in project_requirements(project) if item.get("id") == requirement_id),
+            None,
+        )
+        if req is None:
+            return False
+        req_id = requirement_id
 
     if req:
         req = dict(req)
@@ -8975,8 +9027,11 @@ def layer_summary(layers):
     return out
 
 
-def solution_save_widget(solution, key_prefix="save_solution"):
+def solution_save_widget(solution, key_prefix="save_solution", *,
+                         target_project_id=None, target_requirement_id=None):
     options = get_project_options()
+    if target_project_id is not None:
+        options = [(pid, name) for pid, name in options if pid == target_project_id]
     if not options:
         st.markdown(
             "<div class='result-note'>No hay proyecto creado. Crea uno en el módulo Proyecto para guardar esta solución.</div>",
@@ -9005,7 +9060,7 @@ def solution_save_widget(solution, key_prefix="save_solution"):
         solution["proyecto"] = project_label
 
         if st.button("Guardar en proyecto", use_container_width=True, key=f"{key_prefix}_btn"):
-            if save_solution_to_project(project_id, solution):
+            if save_solution_to_project(project_id, solution, requirement_id=target_requirement_id):
                 st.success(f"Solución guardada en {project_label}.")
             else:
                 st.error("No se pudo guardar la solución.")
@@ -9709,7 +9764,7 @@ def app_project_calculator_embedded(project, requirement):
     elif calc_mode == "Ruido de impacto":
         app_impacto()
     elif calc_mode == "ISO 12354-1":
-        app_iso12354()
+        app_iso12354(project, objetivo)
     elif calc_mode == "Fachada ISO 12354-3":
         app_fachada_iso()
     elif calc_mode == "Exterior ISO 12354-4":
