@@ -10,6 +10,8 @@ import json
 import hashlib
 import html
 import secrets
+import math
+import os
 
 from descriptor_optimizer import (
     canonical_descriptor as canonical_design_descriptor,
@@ -19,12 +21,14 @@ from descriptor_optimizer import (
 )
 
 from academy_access import (
+    academy_supabase_client,
     academy_bridge_configured,
     academy_student_by_email,
     create_sonara_account,
     sonara_account_by_email,
     update_sonara_account,
 )
+from project_store import CloudProjectStore, ProjectStorageError, account_owner
 from iso_design import (
     OCTAVE_EQUIPMENT,
     THIRD_OCTAVE_100_3150,
@@ -1353,6 +1357,13 @@ def authenticate_user(email, password):
     row = match.iloc[0]
     if not verify_password(password, row.get("password_hash", ""), row.get("salt", "")):
         return False, "Contraseña incorrecta."
+
+    # Migrate a verified legacy account before its private projects use the FK.
+    if academy_bridge_configured():
+        account = {key: str(row.get(key, "") or "") for key in ("password_hash", "salt", "nombre", "empresa", "cargo")}
+        account.update(email=email, estado="active")
+        if not create_sonara_account(account):
+            return False, "No se pudo migrar tu cuenta a Supabase. No se modificaron tus proyectos; intenta nuevamente."
 
     idx = match.index[0]
     users.loc[idx, "last_login"] = datetime.now().isoformat(timespec="seconds")
@@ -2717,18 +2728,25 @@ def solution_descriptor_value(solution, indicador):
         "lafmax,nt": "lafmax_nt",
     }
 
+    # Evaluate only the requested descriptor, never substitute another result.
+    # In particular Rw is not DnT,w, and LAeq is not a maximum level.
     key = mapping.get(ind)
-    if key:
-        if key in solution and solution.get(key) is not None:
-            return solution.get(key)
-        descriptors = solution.get("descriptores", {})
-        if isinstance(descriptors, dict) and key in descriptors:
-            return descriptors.get(key)
-
-    # fallback
-    for k in ["valor", "rw", "dntw", "lntw", "lnw"]:
-        if solution.get(k) is not None:
-            return solution.get(k)
+    if ind in ("d2m,nt,w", "d2mntw"):
+        key = "d2mntw"
+    elif ind in ("d2m,nt,atr", "d2mntatr"):
+        key = "d2mnt_atr"
+    containers = [solution, solution.get("descriptores", {})]
+    wanted = canonical_design_descriptor(indicador)
+    for values in containers:
+        if not isinstance(values, dict):
+            continue
+        if key and values.get(key) is not None:
+            return values[key]
+        for label, value in values.items():
+            if canonical_design_descriptor(label) == wanted and value is not None:
+                return value
+    if solution.get("indicador") and canonical_design_descriptor(solution["indicador"]) == wanted:
+        return solution.get("valor")
     return None
 
 
@@ -8558,7 +8576,42 @@ def migrate_legacy_projects_if_needed(email=None):
     user_file.write_text("{}", encoding="utf-8")
 
 
+def cloud_project_storage_enabled():
+    # Local files are an explicit offline/development mode, never a cloud fallback.
+    return os.getenv("SONARA_PROJECT_STORAGE", "supabase").strip().lower() != "local"
+
+
+def project_storage_failure(exc, pending=None):
+    st.error(str(exc))
+    if pending is not None:
+        st.session_state["project_unsaved_changes"] = pending
+    if st.session_state.get("project_unsaved_changes") is not None:
+        st.download_button("Descargar cambios pendientes de guardar", json.dumps(st.session_state["project_unsaved_changes"], ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"), file_name="sonara_cambios_pendientes.json", mime="application/json", key="project_pending_export")
+    st.stop()
+
+
 def load_projects():
+    if cloud_project_storage_enabled():
+        try:
+            store = CloudProjectStore(academy_supabase_client(), st.session_state)
+            data, revision = store.load()
+            # Import only the private file for the authenticated owner, once.
+            # Never assign the old shared projects.json to a newly signed-in user.
+            owned_file = current_user_project_file(store.owner)
+            if revision == 0 and owned_file.exists():
+                try:
+                    legacy = json.loads(owned_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ProjectStorageError("No se pudo leer tu archivo local para migrarlo. Se conserva el original.") from exc
+                if not isinstance(legacy, dict):
+                    raise ProjectStorageError("Tu archivo local de proyectos no es válido; no se migró.")
+                if legacy:
+                    revision = store.save(legacy, 0)
+                    data = legacy
+            st.session_state.setdefault("project_cloud_revisions", {})[store.owner] = revision
+            return data
+        except ProjectStorageError as exc:
+            project_storage_failure(exc)
     try:
         migrate_legacy_projects_if_needed()
         path = current_user_project_file()
@@ -8571,6 +8624,20 @@ def load_projects():
 
 
 def save_projects(data):
+    if cloud_project_storage_enabled():
+        try:
+            store = CloudProjectStore(academy_supabase_client(), st.session_state)
+            revision = st.session_state.get("project_cloud_revisions", {}).get(store.owner)
+            if revision is None:
+                raise ProjectStorageError("Vuelve a cargar tus proyectos antes de guardar.")
+            payload = json.loads(json.dumps(data, ensure_ascii=False, default=_json_default, allow_nan=False))
+            new_revision = store.save(payload, revision)
+            st.session_state["project_cloud_revisions"][store.owner] = new_revision
+            st.session_state.pop("project_unsaved_changes", None)
+            st.session_state["project_cloud_last_saved"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return
+        except (ProjectStorageError, ValueError, TypeError) as exc:
+            project_storage_failure(exc, pending=data)
     path = current_user_project_file()
     path.parent.mkdir(exist_ok=True)
     path.write_text(
@@ -8991,6 +9058,34 @@ def norm_target_rows():
     ]
 
 
+def requirement_indicators(element_type):
+    return {
+        "Paramento vertical": ["Rw", "DnT,w", "DnT,A", "DnT,50", "RA"],
+        "Paramento horizontal": ["L'nT,w", "Ln,w", "L'nT,w+CI", "LnT,50", "DnT,w", "Rw"],
+        "Fachada": ["D2m,nT,w", "D2m,nT,Atr"],
+        "Ventana": ["Rw", "RA", "D2m,nT,Atr"],
+        "Puerta": ["Rw", "RA", "DnT,w", "DnT,A"],
+        "Instalaciones / HVAC": ["LAFmax,nT", "LAeq,nT", "LAeq", "NC", "NR", "NC/NR"],
+        "Reverberación": ["T", "TR", "RT", "A/S"],
+    }.get(element_type, [])
+
+
+def compatible_requirement_targets(frame, element_type):
+    # Never fall back to unrelated descriptors when this catalog has no match.
+    return frame[frame["indicador"].isin(requirement_indicators(element_type))].copy()
+
+
+def validate_custom_requirement(req):
+    for field in ("elemento", "indicador", "unidad", "fuente"):
+        if not str(req.get(field, "")).strip():
+            raise ValueError("Completa el nombre, descriptor, unidad y fuente o justificación del requisito.")
+    if req.get("sentido") not in (">=", "<="):
+        raise ValueError("Selecciona un mínimo o un máximo.")
+    if not math.isfinite(float(req.get("valor", float("nan")))):
+        raise ValueError("El límite debe ser un número finito.")
+    return req
+
+
 def norm_targets_df():
     return pd.DataFrame(norm_target_rows())
 
@@ -9193,6 +9288,44 @@ def project_rooms(project):
     return rooms
 
 
+def rename_room(project_id, room_id, new_name):
+    """Rename in place, retaining room/requirement IDs and saved solutions."""
+    new_name = str(new_name or "").strip()
+    if not new_name:
+        raise ValueError("Escribe un nombre para el recinto.")
+    projects = load_projects()
+    project = projects.get(project_id)
+    if project is None:
+        raise ValueError("Proyecto no encontrado.")
+    rooms = project_rooms(project)
+    room = next((r for r in rooms if r.get("id") == room_id), None)
+    if room is None:
+        raise ValueError("Recinto no encontrado.")
+    if any(r.get("id") != room_id and str(r.get("nombre", "")).strip().casefold() == new_name.casefold() for r in rooms):
+        raise ValueError("Ya existe un recinto con ese nombre. Usa un nombre diferente.")
+    old_name = room["nombre"]
+    room["nombre"] = new_name
+    def update_links(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in ("recinto_emisor", "recinto_receptor") and item == old_name:
+                    value[key] = new_name
+                else:
+                    update_links(item)
+        elif isinstance(value, list):
+            for item in value:
+                update_links(item)
+    update_links(project)
+    project["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    save_projects(projects)
+    for key in ("active_requirement", "last_solution"):
+        update_links(st.session_state.get(key))
+    for key in ("matrix_emisor", "matrix_receptor"):
+        if st.session_state.get(key) == old_name:
+            del st.session_state[key]
+    return True
+
+
 def upsert_room(project_id, room):
     projects = load_projects()
     if project_id not in projects:
@@ -9206,8 +9339,14 @@ def upsert_room(project_id, room):
     if not name:
         return False
 
-    room_id = "room_" + "".join(ch.lower() if ch.isalnum() else "_" for ch in name)
-    room_id = "_".join([x for x in room_id.split("_") if x])
+    # A renamed room keeps its stable ID; subsequent edits must update it.
+    existing_room = next((r for r in rooms if str(r.get("nombre", "")).casefold() == name.casefold()), None)
+    room_id = (existing_room or {}).get("id")
+    if not room_id:
+        room_id = "room_" + "".join(ch.lower() if ch.isalnum() else "_" for ch in name)
+        room_id = "_".join([x for x in room_id.split("_") if x])
+        if any(r.get("id") == room_id for r in rooms):
+            room_id += "_" + secrets.token_hex(4)
     room["id"] = room_id
     room["nombre"] = name
 
@@ -9541,7 +9680,7 @@ def app_project_calculator_embedded(project, requirement):
     default_index = 2 if calc_mode_default == "Ruido de impacto" else 0
     if tipo_elemento_req == "Fachada":
         default_index = 4
-    elif indicador in ["LAeq,nT", "LAFmax,nT", "NC", "NR"]:
+    elif tipo_elemento_req == "Instalaciones / HVAC" or indicador in ["LAeq,nT", "LAFmax,nT", "LAeq", "NC", "NR", "NC/NR"]:
         default_index = 6
     elif indicador in ["T", "TR", "A/S"]:
         default_index = 7
@@ -9550,7 +9689,7 @@ def app_project_calculator_embedded(project, requirement):
         calc_options,
         index=default_index,
         horizontal=True,
-        key="project_embedded_calc_mode"
+        key=f"project_embedded_calc_mode_{objetivo.get('id', tipo_elemento_req)}"
     )
 
     st.markdown(
@@ -9722,6 +9861,18 @@ def app_proyectos():
                 else:
                     df_rooms = pd.DataFrame(rooms)
                     st.dataframe(df_rooms, use_container_width=True, hide_index=True, height=360)
+                    with st.expander("✏️ Renombrar recinto"):
+                        rename_id = st.selectbox("Recinto a renombrar", [r["id"] for r in rooms], format_func=lambda rid: next(r["nombre"] for r in rooms if r["id"] == rid), key="room_rename_id")
+                        new_room_name = st.text_input("Nuevo nombre del recinto", key="room_rename_name")
+                        st.caption("Conserva área, volumen, elementos vinculados y soluciones guardadas.")
+                        if st.button("Guardar nuevo nombre", key="room_rename_save"):
+                            try:
+                                rename_room(pid, rename_id, new_room_name)
+                            except ValueError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.success("Nombre actualizado; vínculos y soluciones conservados.")
+                                st.rerun()
                     room_names = [r.get("nombre") for r in rooms]
                     del_room = st.selectbox("Eliminar recinto", [""] + room_names, key="room_delete_select")
                     if del_room and st.button("🗑 Eliminar recinto seleccionado", use_container_width=True, key="room_delete_btn"):
@@ -9758,46 +9909,52 @@ def app_proyectos():
                 df_sector = df_targets[df_targets["sector"] == p.get("tipo")].copy()
                 if p.get("norma") != "Todas":
                     df_sector = df_sector[df_sector["norma"] == p.get("norma")].copy()
-                if df_sector.empty:
-                    df_sector = df_targets[df_targets["sector"] == p.get("tipo")].copy()
-
-                df_req = df_sector.copy()
-                if tipo_elemento == "Paramento horizontal":
-                    df_req = df_req[df_req["indicador"].isin(["L'nT,w", "Ln,w", "L'nT,w+CI", "DnT,w", "Rw"])]
-                elif tipo_elemento in ["Paramento vertical", "Puerta", "Ventana"]:
-                    df_req = df_req[df_req["indicador"].isin(["Rw", "DnT,w", "DnT,A", "RA", "D2m,nT,Atr"])]
-                elif tipo_elemento == "Fachada":
-                    df_req = df_req[df_req["indicador"].isin(["D2m,nT,Atr", "Rw", "RA", "LAeq"])]
-                elif tipo_elemento == "Instalaciones / HVAC":
-                    df_req = df_req[df_req["indicador"].isin(["NR", "NC", "NC/NR", "LAeq"])]
-                elif tipo_elemento == "Reverberación":
-                    df_req = df_req[df_req["indicador"].isin(["T", "TR", "RT"])]
-
-                if df_req.empty:
-                    df_req = df_sector.copy()
-
-                opciones = (
-                    df_req["elemento"].astype(str) + " · " + df_req["indicador"].astype(str) + " " +
-                    df_req["sentido"].astype(str) + " " + df_req["valor"].astype(str) + " " +
-                    df_req["unidad"].astype(str) + " · " + df_req["norma"].astype(str)
-                ).tolist()
-                seleccion = st.selectbox("Requerimiento acústico", opciones, key="matrix_target")
-                row = df_req.iloc[opciones.index(seleccion)]
-
-                requerimiento = {
-                    "sector": row["sector"], "norma": row["norma"], "elemento": row["elemento"],
-                    "indicador": row["indicador"], "sentido": row["sentido"], "valor": float(row["valor"]),
-                    "unidad": row["unidad"], "fuente": row["fuente"],
-                    "recinto_emisor": emisor, "recinto_receptor": receptor, "tipo_elemento": tipo_elemento,
-                }
+                df_req = compatible_requirement_targets(df_sector, tipo_elemento)
+                origen = st.radio("Origen del requisito", ["Catálogo", "Personalizado"], horizontal=True, key="matrix_requirement_origin")
+                requerimiento = None
+                if origen == "Catálogo":
+                    if df_req.empty:
+                        st.info("No hay requisitos compatibles con este elemento y la referencia del proyecto. Selecciona Personalizado para ingresar tu objetivo.")
+                    else:
+                        opciones = (
+                            df_req["elemento"].astype(str) + " · " + df_req["indicador"].astype(str) + " " +
+                            df_req["sentido"].astype(str) + " " + df_req["valor"].astype(str) + " " +
+                            df_req["unidad"].astype(str) + " · " + df_req["norma"].astype(str)
+                        ).tolist()
+                        seleccion = st.selectbox("Requerimiento acústico", opciones, key="matrix_target")
+                        row = df_req.iloc[opciones.index(seleccion)]
+                        requerimiento = {key: row[key] for key in ("sector", "norma", "elemento", "indicador", "sentido", "unidad", "fuente")}
+                        requerimiento.update(valor=float(row["valor"]), origen="catalogo")
+                else:
+                    nombre_req = st.text_input("Código y nombre del requisito", placeholder="FA-01 · Fachada norte", key="matrix_custom_name")
+                    indicadores = requirement_indicators(tipo_elemento) + ["Otro descriptor"]
+                    indicador_req = st.selectbox("Descriptor del requisito", indicadores, key=f"matrix_custom_descriptor_{tipo_elemento}")
+                    if indicador_req == "Otro descriptor":
+                        indicador_req = st.text_input("Descriptor personalizado", key="matrix_custom_descriptor_text")
+                    default_max = tipo_elemento in ("Instalaciones / HVAC", "Reverberación") or indicador_req.startswith(("L'", "Ln"))
+                    sentido_req = st.selectbox("Comparación", [">=", "<="], index=1 if default_max else 0, key=f"matrix_custom_direction_{tipo_elemento}_{indicador_req}")
+                    limite_req = st.number_input("Límite requerido", value=None, step=0.1, format="%.2f", placeholder="Ingresa el límite", key=f"matrix_custom_limit_{tipo_elemento}_{indicador_req}")
+                    unidad_req = st.text_input("Unidad", value="s" if tipo_elemento == "Reverberación" else "dB", key=f"matrix_custom_unit_{tipo_elemento}")
+                    norma_req = st.text_input("Norma o referencia del objetivo", placeholder="Norma, criterio del mandante o ejercicio académico", key="matrix_custom_reference")
+                    fuente_req = st.text_area("Fuente, condiciones y justificación", placeholder="Tabla o apartado; condiciones de evaluación y procedencia del límite", key="matrix_custom_source")
+                    st.caption("El requisito se guarda en este proyecto. El cumplimiento automático requiere que la solución entregue el mismo descriptor; un descriptor no disponible queda sin evaluación.")
+                    candidato = dict(sector=p.get("tipo"), norma=norma_req.strip() or "Criterio de proyecto", elemento=nombre_req.strip(), indicador=indicador_req.strip(), sentido=sentido_req, valor=limite_req, unidad=unidad_req.strip(), fuente=fuente_req.strip(), origen="personalizado")
+                    try:
+                        if limite_req is None:
+                            raise ValueError("Ingresa el límite requerido.")
+                        requerimiento = validate_custom_requirement(candidato)
+                    except (ValueError, TypeError) as exc:
+                        st.caption(str(exc))
+                if requerimiento is not None:
+                    requerimiento.update(recinto_emisor=emisor, recinto_receptor=receptor, tipo_elemento=tipo_elemento)
 
                 c1, c2 = st.columns([0.7, 0.3])
                 with c1:
-                    if st.button("➕ Agregar elemento a la matriz", use_container_width=True, key="matrix_add"):
+                    if st.button("➕ Agregar elemento a la matriz", use_container_width=True, key="matrix_add", disabled=requerimiento is None):
                         req_id = upsert_requirement(pid, requerimiento)
                         st.success("Elemento agregado a la matriz y dejado como activo.")
                 with c2:
-                    if st.button("📐 Diseñar este elemento", use_container_width=True, key="matrix_design"):
+                    if st.button("📐 Diseñar este elemento", use_container_width=True, key="matrix_design", disabled=requerimiento is None):
                         req_id = upsert_requirement(pid, requerimiento)
                         st.success("Elemento activo. Ve a la pestaña Diseñar.")
 
@@ -10049,26 +10206,44 @@ def app_configuracion():
             st.success("Configuración de costos guardada.")
 
     with tabs[4]:
-        st.markdown("<div class='sonara-card-title'>Datos locales</div>", unsafe_allow_html=True)
-        st.markdown(
-            """
-            <div class='result-note'>
-            SONARA guarda localmente usuarios, materiales, configuración y proyectos en la carpeta <b>data/</b>.
-            En una versión web productiva, esto debería migrar a una base de datos por usuario.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        user_projects = current_user_project_file(email)
-        files_to_download = [USERS_CSV, user_projects, MATERIALS_CSV, SETTINGS_JSON]
-        for f in files_to_download:
-            if f.exists():
-                st.download_button(f"⬇ Descargar {f.name}", data=f.read_bytes(), file_name=f.name, use_container_width=True)
-
-        st.markdown(
-            f"<div class='result-note'>Archivo de proyectos del usuario activo: <b>{user_projects}</b></div>",
-            unsafe_allow_html=True
-        )
+        st.markdown("<div class='sonara-card-title'>Proyectos y respaldos de tu cuenta</div>", unsafe_allow_html=True)
+        projects = load_projects()
+        if cloud_project_storage_enabled():
+            st.success("Tus proyectos se guardan en Supabase y se recuperan al iniciar sesión en tu cuenta.")
+            revision = st.session_state.get("project_cloud_revisions", {}).get(account_owner(st.session_state), 0)
+            st.caption(f"Versión recuperada de Supabase: {revision}.")
+        else:
+            st.warning("Modo local: estos proyectos solo existen en este servidor. Descarga un respaldo antes de reiniciarlo o trasladarlo.")
+        st.download_button("⬇ Descargar respaldo de mis proyectos", json.dumps(projects, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"), file_name=f"{safe_user_id(email)}.json", mime="application/json")
+        if cloud_project_storage_enabled():
+            try:
+                store = CloudProjectStore(academy_supabase_client(), st.session_state)
+                versions = store.versions()
+                if versions:
+                    version_id = st.selectbox("Versiones anteriores de mi cuenta", [v["revision"] for v in versions], format_func=lambda rev: next(f"Versión {rev} · {v['created_at']}" for v in versions if v["revision"] == rev))
+                    version_data = store.version(version_id)
+                    st.download_button("⬇ Descargar esta versión", json.dumps(version_data, ensure_ascii=False, indent=2).encode("utf-8"), file_name=f"sonara_version_{version_id}.json", mime="application/json")
+            except ProjectStorageError as exc:
+                st.warning(str(exc))
+        uploaded_backup = st.file_uploader("Recuperar proyectos desde un respaldo JSON", type=["json"], key="project_backup_import")
+        st.caption("La recuperación agrega proyectos que no existen en tu cuenta. No reemplaza proyectos actuales con el mismo identificador.")
+        if st.button("Incorporar proyectos del respaldo", disabled=uploaded_backup is None):
+            try:
+                recovered = json.loads(uploaded_backup.getvalue().decode("utf-8-sig"))
+                if not isinstance(recovered, dict) or any(not isinstance(v, dict) for v in recovered.values()):
+                    raise ValueError("El respaldo no contiene un documento válido de proyectos SONARA.")
+                current = load_projects()
+                conflicts = [key for key in recovered if key in current and current[key] != recovered[key]]
+                if conflicts:
+                    raise ValueError("El respaldo contiene proyectos que ya existen y son diferentes. No se reemplazó ningún dato.")
+                save_projects({**current, **recovered})
+                st.success("Proyectos recuperados y guardados.")
+                st.rerun()
+            except (ValueError, UnicodeError) as exc:
+                st.error(str(exc))
+        # Never export the shared users/password file or other users' settings.
+        if MATERIALS_CSV.exists():
+            st.download_button("⬇ Descargar materiales_sonara.csv", MATERIALS_CSV.read_bytes(), file_name=MATERIALS_CSV.name)
 
 
 def app_ayuda():

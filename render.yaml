@@ -5,6 +5,8 @@ services:
     plan: free
     autoDeploy: true
     envVars:
+      - key: SONARA_PROJECT_STORAGE
+        value: supabase
       - key: PYTHON_VERSION
         value: 3.11
       - key: SONARA_ACADEMY_SUPABASE_URL
