@@ -3518,17 +3518,26 @@ def app_iso12354(project=None, requirement=None):
 
     def transmission_scheme_html(flanks_data):
         active = active_flank_names(flanks_data)
-        show_losa = "Losa horizontal" in active
+        show_floor = "Losa de piso" in active
+        show_ceiling = "Losa de cielo" in active
         show_muro1 = "Muro lateral 1" in active
         show_muro2 = "Muro lateral 2" in active
         show_fachada = "Fachada / elemento lateral" in active
 
-        losa_html = ""
-        if show_losa:
-            losa_html = """
+        ceiling_html = ""
+        if show_ceiling:
+            ceiling_html = """
             <div style="position:absolute;left:6%;top:4%;width:88%;height:7px;background:#22C55E;border-radius:10px;"></div>
             <div style="position:absolute;left:56%;top:7%;height:38%;border-left:4px dashed #22C55E;"></div>
-            <div style="position:absolute;left:59%;top:8%;color:#00E08A;font-weight:900;">Fd losa</div>
+            <div style="position:absolute;left:59%;top:8%;color:#00E08A;font-weight:900;">Losa de cielo</div>
+            """
+
+        floor_html = ""
+        if show_floor:
+            floor_html = """
+            <div style="position:absolute;left:6%;bottom:13%;width:88%;height:7px;background:#FBBF24;border-radius:10px;"></div>
+            <div style="position:absolute;left:58%;bottom:16%;height:21%;border-left:4px dashed #FBBF24;"></div>
+            <div style="position:absolute;left:61%;bottom:28%;color:#FCD34D;font-weight:900;">Losa de piso</div>
             """
 
         muro1_html = ""
@@ -3587,10 +3596,11 @@ def app_iso12354(project=None, requirement=None):
                     Dd<br><span style="font-size:13px;color:#42A5FF;">directa</span>
                 </div>
 
-                {losa_html}
                 {muro1_html}
                 {muro2_html}
                 {fachada_html}
+                {ceiling_html}
+                {floor_html}
 
                 <div style="position:absolute;left:18%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto emisor</div>
                 <div style="position:absolute;right:16%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto receptor</div>
@@ -3654,10 +3664,12 @@ def app_iso12354(project=None, requirement=None):
             {"nombre": "Muro lateral 1", "rw": 45.0, "kij": 5.0, "activo": True, "key": "muro1"},
             {"nombre": "Muro lateral 2", "rw": 45.0, "kij": 5.0, "activo": True, "key": "muro2"},
             {"nombre": "Fachada / elemento lateral", "rw": 45.0, "kij": 5.0, "activo": False, "key": "fachada"},
-            {"nombre": "Losa horizontal", "rw": 55.0, "kij": 8.0, "activo": False, "key": "losa"},
+            {"nombre": "Losa de piso", "rw": 55.0, "kij": 8.0, "activo": False, "key": "losa"},
+            {"nombre": "Losa de cielo", "rw": 55.0, "kij": 8.0, "activo": False, "key": "losa_cielo"},
         ]
 
         if incluir_flanqueos:
+            st.caption("Activa la losa de piso y la de cielo por separado según sus encuentros con el muro. Usa la losa estructural superior para el encuentro de cielo.")
             for i, fl in enumerate(flancos_base, start=1):
                 with st.expander(f"{fl['nombre']}", expanded=fl["activo"]):
                     activo = st.checkbox(
