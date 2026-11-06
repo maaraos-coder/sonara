@@ -3513,100 +3513,33 @@ def app_iso12354(project=None, requirement=None):
         rw_calc, c_calc, ctr_calc = iso717_rw_simple(third_freqs_calc, tl_third_calc)
         return float(rw_calc), float(masa_calc), float(fc_calc), third_freqs_calc, tl_third_calc
 
-    def active_flank_names(flanks_data):
-        return [f["nombre"] for f in flanks_data if f.get("activo", False)]
-
-    def transmission_scheme_html(flanks_data):
-        active = active_flank_names(flanks_data)
-        show_floor = "Losa de piso" in active
-        show_ceiling = "Losa de cielo" in active
-        show_muro1 = "Muro lateral 1" in active
-        show_muro2 = "Muro lateral 2" in active
-        show_fachada = "Fachada / elemento lateral" in active
-
-        ceiling_html = ""
-        if show_ceiling:
-            ceiling_html = """
-            <div style="position:absolute;left:6%;top:4%;width:88%;height:7px;background:#22C55E;border-radius:10px;"></div>
-            <div style="position:absolute;left:56%;top:7%;height:38%;border-left:4px dashed #22C55E;"></div>
-            <div style="position:absolute;left:59%;top:8%;color:#00E08A;font-weight:900;">Losa de cielo</div>
-            """
-
-        floor_html = ""
-        if show_floor:
-            floor_html = """
-            <div style="position:absolute;left:6%;bottom:13%;width:88%;height:7px;background:#FBBF24;border-radius:10px;"></div>
-            <div style="position:absolute;left:58%;bottom:16%;height:21%;border-left:4px dashed #FBBF24;"></div>
-            <div style="position:absolute;left:61%;bottom:28%;color:#FCD34D;font-weight:900;">Losa de piso</div>
-            """
-
-        muro1_html = ""
-        if show_muro1:
-            muro1_html = """
-            <div style="position:absolute;left:4%;top:18%;height:64%;border-left:5px dashed #FF8A1F;"></div>
-            <div style="position:absolute;left:6%;top:77%;width:47%;border-top:4px dashed #FF8A1F;"></div>
-            <div style="position:absolute;left:28%;top:70%;color:#FF9F2E;font-weight:900;">Ff muro 1</div>
-            """
-
-        muro2_html = ""
-        if show_muro2:
-            muro2_html = """
-            <div style="position:absolute;right:4%;top:18%;height:64%;border-right:5px dashed #A855F7;"></div>
-            <div style="position:absolute;left:47%;top:23%;width:48%;border-top:4px dashed #A855F7;"></div>
-            <div style="position:absolute;left:70%;top:16%;color:#C084FC;font-weight:900;">Df muro 2</div>
-            """
-
-        fachada_html = ""
-        if show_fachada:
-            fachada_html = """
-            <div style="position:absolute;left:6%;bottom:8%;width:88%;height:7px;background:#38BDF8;border-radius:10px;"></div>
-            <div style="position:absolute;left:48%;bottom:11%;height:29%;border-left:4px dashed #38BDF8;"></div>
-            <div style="position:absolute;left:50%;bottom:18%;color:#7DD3FC;font-weight:900;">Fachada</div>
-            """
-
-        return textwrap.dedent(f"""
-        <div class="sonara-card" style="margin-top:20px;">
-            <div class="sonara-card-title">Esquema de caminos de transmisión</div>
-            <div style="position:relative;height:330px;margin-top:10px;">
-
-                <div style="position:absolute;left:8%;top:22%;width:34%;height:56%;
-                    background:linear-gradient(135deg,#1b2735,#07111d);
-                    border:7px solid #7f8791;border-radius:4px;
-                    box-shadow:inset 0 0 28px rgba(0,0,0,.7);">
-                </div>
-
-                <div style="position:absolute;right:8%;top:22%;width:34%;height:56%;
-                    background:linear-gradient(135deg,#1b2735,#07111d);
-                    border:7px solid #7f8791;border-radius:4px;
-                    box-shadow:inset 0 0 28px rgba(0,0,0,.7);">
-                </div>
-
-                <div style="position:absolute;left:44%;top:18%;width:12%;height:66%;
-                    border-left:5px solid #a7adb5;border-right:5px solid #a7adb5;
-                    background:rgba(160,170,180,.16);">
-                </div>
-
-                <div style="position:absolute;left:35%;top:49%;width:18%;height:4px;background:#0A84FF;"></div>
-                <div style="position:absolute;left:52%;top:45%;width:0;height:0;
-                    border-top:12px solid transparent;
-                    border-bottom:12px solid transparent;
-                    border-left:18px solid #0A84FF;">
-                </div>
-                <div style="position:absolute;left:33%;top:39%;color:#42A5FF;font-weight:900;">
-                    Dd<br><span style="font-size:13px;color:#42A5FF;">directa</span>
-                </div>
-
-                {muro1_html}
-                {muro2_html}
-                {fachada_html}
-                {ceiling_html}
-                {floor_html}
-
-                <div style="position:absolute;left:18%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto emisor</div>
-                <div style="position:absolute;right:16%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto receptor</div>
-            </div>
-        </div>
-        """)
+    def transmission_scheme_html(paths, path_styles):
+        routes = {
+            "Dd": ("Separador", "Separador"),
+            "Df": ("Separador", "Flanco"),
+            "Fd": ("Flanco", "Separador"),
+            "Ff": ("Flanco", "Flanco"),
+        }
+        cards = []
+        for path in paths:
+            name = path["name"]
+            code = name.split(" · ", 1)[0]
+            origin, destination = routes[code]
+            style = path_styles[name]
+            border = {"solid": "solid", "dash": "dashed", "dot": "dotted"}[style["dash"]]
+            cards.append(
+                f'<div style="background:#0B1624;border-radius:8px;padding:10px 12px;">'
+                f'<strong style="color:{style["color"]};border-bottom:2px {border} {style["color"]};">'
+                f'{html.escape(name)}</strong>'
+                f'<div style="margin-top:6px;">{origin} → {destination}</div></div>'
+            )
+        return (
+            '<div class="sonara-card"><div class="sonara-card-title">Esquema de caminos de transmisión</div>'
+            '<p>Lectura de cada camino: lado emisor → lado receptor. '
+            'Los nombres, colores y trazos coinciden con las curvas por bandas.</p>'
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));'
+            'gap:8px;color:#EAF4FF;">' + "".join(cards) + '</div></div>'
+        )
 
     col_input, col_results = st.columns([1.05, 1.15], gap="large")
 
@@ -3933,11 +3866,16 @@ def app_iso12354(project=None, requirement=None):
             unsafe_allow_html=True
         )
 
-        components.html(
-            transmission_scheme_html(flanks if incluir_flanqueos else []),
-            height=390,
-            scrolling=False
-        )
+        paths = airborne_result["paths"]
+        path_colors = ["#FF9F43", "#C084FC", "#FCD34D", "#5EEAD4", "#F9A8D4"]
+        flank_colors = {}
+        path_styles = {"Dd": dict(color="#4F7CFF", width=3, dash="solid")}
+        for path in paths[1:]:
+            name = path["name"]
+            code, _, flank = name.partition(" · ")
+            color = flank_colors.setdefault(flank, path_colors[len(flank_colors) % len(path_colors)])
+            path_styles[name] = dict(color=color, width=2, dash={"Df": "solid", "Fd": "dash", "Ff": "dot"}[code])
+        st.markdown(transmission_scheme_html(paths, path_styles), unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -3948,20 +3886,12 @@ def app_iso12354(project=None, requirement=None):
 
         fig = go.Figure()
 
-        fig.add_trace(go.Scatter(
-            x=freqs,
-            y=np.round(r_direct, 1),
-            mode="lines+markers",
-            name="R directo (Dd)",
-            line=dict(color="#4F7CFF", width=3),
-            marker=dict(size=6)
-        ))
-
-        for path in airborne_result["paths"][1:]:
+        for path in paths:
+            name = path["name"]
             fig.add_trace(go.Scatter(
-                x=freqs, y=np.round(path["curve"], 1), mode="lines",
-                name=path["name"], line=dict(width=1.2, dash="dot"),
-                opacity=0.7,
+                x=freqs, y=np.round(path["curve"], 1),
+                mode="lines+markers" if name == "Dd" else "lines",
+                name=name, line=path_styles[name],
             ))
 
         fig.add_trace(go.Scatter(
@@ -3990,16 +3920,6 @@ def app_iso12354(project=None, requirement=None):
             line=dict(color="#FF8A1F", width=2, dash="dash")
         ))
 
-        iso_ref = np.asarray(r_direct, dtype=float) + 3.0
-
-        fig.add_trace(go.Scatter(
-            x=freqs,
-            y=np.round(iso_ref, 1),
-            mode="lines",
-            name="Curva ISO 717 ref.",
-            line=dict(color="#D7E3F4", width=2, dash="dot")
-        ))
-
         fig.update_xaxes(
             type="log",
             title="Frecuencia [Hz]",
@@ -4012,7 +3932,7 @@ def app_iso12354(project=None, requirement=None):
         )
 
         fig.update_yaxes(
-            title="Aislamiento acústico R [dB]",
+            title="Magnitud [dB]",
             gridcolor="rgba(255,255,255,.10)",
             tickfont=dict(size=15, color="#FFFFFF"),
             title_font=dict(size=16, color="#FFFFFF")
@@ -4041,7 +3961,7 @@ def app_iso12354(project=None, requirement=None):
         st.markdown(
             """
             <div class='result-note'>
-            La curva gris punteada se muestra como referencia visual. 
+            R’ aparente combina energéticamente Dd y los caminos laterales. DnT incorpora la normalización entre recintos.
             Los resultados dependen de la calidad de los datos de entrada y de las hipótesis del modelo.
             </div>
             """,
