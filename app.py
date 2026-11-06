@@ -7875,6 +7875,12 @@ def app_fachada_iso():
         and float(material.get("dens", 0.0) or 0.0) > 0.0
         and float(material.get("E", 0.0) or 0.0) > 0.0
     ]
+    glass_materials = [name for name in facade_materials if materials[name]["grupo"] == "vidrio"]
+    modes = ["SONARA · Panel simple", "Manual Rw/Ctr", "SONARA · DVH", "SONARA · Panel doble", "Espectro de ensayo"]
+    if not glass_materials:
+        modes.remove("SONARA · DVH")
+    fine = np.linspace(45.0, 6000.0, 1191)
+    incomplete_spectra = []
     count = st.slider("Cantidad de componentes", 1, 6, 2, key="fac_count")
     defaults = [
         ("Muro opaco", max(facade_area - 3.0, 1.0), 50.0, -5.0),
@@ -7893,51 +7899,99 @@ def app_fachada_iso():
             area = cols[1].number_input("Área [m²]", 0.0, 500.0, float(default[1]), 0.25, key=f"fac_comp_area_{idx}")
             calculation_mode = cols[2].selectbox(
                 "Origen acústico",
-                ["SONARA", "Manual Rw/Ctr"],
-                index=0,
+                modes,
+                index=modes.index("SONARA · DVH") if idx == 1 and glass_materials else 0,
                 key=f"fac_mode_{idx}",
             )
-
-            if calculation_mode == "SONARA":
+            if calculation_mode == "SONARA · Panel simple":
                 preferred = "Vidrio monolítico" if idx == 1 else "Hormigón armado"
                 preferred_index = facade_materials.index(preferred) if preferred in facade_materials else 0
                 material_name = st.selectbox(
-                    "Material",
-                    facade_materials,
-                    index=preferred_index,
-                    key=f"fac_material_{idx}",
+                    "Material", facade_materials, index=preferred_index, key=f"fac_material_{idx}",
                 )
                 material = materials[material_name]
-                thickness_default = max(float(material.get("espesor", 10.0) or 10.0), 0.1)
                 thickness = st.number_input(
-                    "Espesor [mm]",
-                    min_value=0.1,
-                    max_value=1000.0,
-                    value=thickness_default,
-                    step=0.5,
+                    "Espesor [mm]", 0.1, 1000.0, max(float(material.get("espesor") or 10.0), 0.1), 0.5,
                     key=f"fac_thickness_{idx}",
                 )
-                fine = np.linspace(45.0, 6000.0, 1191)
-                fine_curve, _, _, _, _ = walls_panel_tl(material, thickness, fine)
-                third_freqs, third_curve = third_octave_from_fine(fine, fine_curve)
-                numbers = airborne_single_numbers(third_freqs, third_curve)
-                rw = float(numbers["weighted"])
-                c_value = float(numbers["c"])
-                ctr = float(numbers["ctr"])
-                curve_freqs = third_freqs
-                curve = third_curve
-                detail = f"{material_name} · {thickness:.1f} mm"
-                st.caption(f"Resultado del componente: Rw {rw:.0f} dB · C {c_value:+.0f} dB · Ctr {ctr:+.0f} dB")
+                fine_curve, *_ = walls_panel_tl(material, thickness, fine)
+                detail = f"{material_name} · {thickness:g} mm"
+            elif calculation_mode == "SONARA · DVH":
+                exterior, cavity, interior = st.columns(3)
+                glass_index = glass_materials.index("Vidrio monolítico") if "Vidrio monolítico" in glass_materials else 0
+                glass_out = exterior.selectbox("Vidrio exterior", glass_materials, index=glass_index, key=f"fac_glass_out_{idx}")
+                out_mm = exterior.number_input("Espesor exterior [mm]", 0.1, 100.0, 6.0, 0.5, key=f"fac_glass_out_mm_{idx}")
+                cavity_mm = cavity.number_input("Cámara de aire [mm]", 0.1, 500.0, 12.0, 0.5, key=f"fac_glass_cavity_{idx}")
+                glass_in = interior.selectbox("Vidrio interior", glass_materials, index=glass_index, key=f"fac_glass_in_{idx}")
+                in_mm = interior.number_input("Espesor interior [mm]", 0.1, 100.0, 4.0, 0.5, key=f"fac_glass_in_mm_{idx}")
+                fine_curve, *_ = walls_window_tl(materials[glass_out], out_mm, materials[glass_in], in_mm, cavity_mm, fine)
+                detail = f"{glass_out} {out_mm:g} mm / aire {cavity_mm:g} mm / {glass_in} {in_mm:g} mm"
+                st.caption("Predicción del acristalamiento. Para evaluar la ventana completa con marco y sellos, usa datos de ensayo del conjunto.")
+            elif calculation_mode == "SONARA · Panel doble":
+                left_col, right_col = st.columns(2)
+                preferred = ("Hormigón armado", "Placa de yeso-cartón estándar")
+                leaves = []
+                for side, col, title, first in zip(("out", "in"), (left_col, right_col), ("Hoja exterior", "Hoja interior"), preferred):
+                    ordered = sorted(facade_materials, key=lambda name: name != first)
+                    with col:
+                        leaves.append(layer_inputs(f"fac_double_{side}_{idx}", title, ordered, materials))
+                cavity, connection, absorber = st.columns(3)
+                cavity_mm = cavity.number_input("Cámara [mm]", 0.1, 500.0, 50.0, 0.5, key=f"fac_double_cavity_{idx}")
+                configuration = connection.selectbox(
+                    "Montaje", ["Montante simple", "Montantes independientes", "Doble estructura"],
+                    index=2, format_func=lambda value: {
+                        "Montantes independientes": "Montantes alternados",
+                        "Doble estructura": "Doble estructura independiente",
+                    }.get(value, value), key=f"fac_double_connection_{idx}",
+                )
+                absorbent = absorber.selectbox(
+                    "Absorbente", ["Sin absorbente", "Lana mineral 40 kg/m³", "Lana mineral 60 kg/m³", "Lana mineral 80 kg/m³"],
+                    key=f"fac_double_absorber_{idx}",
+                )
+                spacing = connection.number_input(
+                    "Separación entre fijaciones [mm]", 50.0, 2000.0, 600.0, 10.0, key=f"fac_double_spacing_{idx}",
+                )
+                fine_curve, *_ = walls_double_multilayer_tl(
+                    *leaves, cavity_mm, fine, configuracion=configuration, absorbente_tipo=absorbent,
+                    distancia_fijaciones_mm=spacing,
+                )
+                leaf_details = [" + ".join(f"{layer['nombre']} {layer['espesor']:g} mm" for layer in leaf) for leaf in leaves]
+                detail = (
+                    f"{leaf_details[0]} / cámara {cavity_mm:g} mm ({absorbent}) / {leaf_details[1]}"
+                    f" · {configuration} · fijaciones {spacing:g} mm"
+                )
+            elif calculation_mode == "Espectro de ensayo":
+                reference = st.text_input("Referencia del ensayo", key=f"fac_test_ref_{idx}")
+                curve_freqs = np.asarray(THIRD_OCTAVE_100_3150, dtype=float)
+                band_table = st.data_editor(
+                    pd.DataFrame({"Frecuencia [Hz]": curve_freqs.astype(int), "R [dB]": np.full(len(curve_freqs), np.nan)}),
+                    disabled=["Frecuencia [Hz]"], hide_index=True, key=f"fac_test_curve_{idx}",
+                )
+                curve = band_table["R [dB]"].to_numpy(dtype=float, na_value=np.nan)
+                if not np.all(np.isfinite(curve)):
+                    if area > 0:
+                        incomplete_spectra.append(name)
+                    continue
+                detail = f"Espectro de ensayo · {reference}" if reference.strip() else "Espectro de ensayo ingresado"
             else:
-                manual_cols = st.columns(2)
+                manual_cols = st.columns(3)
                 rw = manual_cols[0].number_input("Rw [dB]", 5.0, 90.0, float(default[2]), 1.0, key=f"fac_rw_{idx}")
-                ctr = manual_cols[1].number_input("Ctr [dB]", -20.0, 0.0, float(default[3]), 1.0, key=f"fac_ctr_{idx}")
+                declared_c = manual_cols[1].number_input("C de ficha [dB] (opcional)", value=None, step=1.0, key=f"fac_c_{idx}")
+                ctr = manual_cols[2].number_input("Ctr [dB]", -20.0, 0.0, float(default[3]), 1.0, key=f"fac_ctr_{idx}")
                 curve_freqs = np.asarray(THIRD_OCTAVE_100_3150, dtype=float)
                 curve = manual_airborne_curve(rw, ctr, curve_freqs)
-                numbers = airborne_single_numbers(curve_freqs, curve)
-                c_value = float(numbers["c"])
-                ctr = float(numbers["ctr"])
-                detail = "Curva ISO 717 de proyecto reconstruida desde Rw/Ctr"
+                detail = f"Curva aproximada reconstruida desde Rw {rw:g} y Ctr {ctr:g} dB"
+                if declared_c is not None:
+                    detail += f" · C de ficha {declared_c:+g} dB"
+                st.caption("La curva se aproxima con Rw y Ctr. El C de ficha queda como referencia documental.")
+
+            if calculation_mode.startswith("SONARA"):
+                curve_freqs, curve = third_octave_from_fine(fine, fine_curve)
+            numbers = airborne_single_numbers(curve_freqs, curve)
+            rw = float(numbers["weighted"])
+            c_value = float(numbers["c"])
+            ctr = float(numbers["ctr"])
+            st.caption(f"Resultado de la curva del componente: Rw {rw:.0f} dB · C {c_value:+.0f} dB · Ctr {ctr:+.0f} dB")
 
             components.append({
                 "name": name,
@@ -7959,6 +8013,10 @@ def app_fachada_iso():
                 "C [dB]": c_value,
                 "Ctr [dB]": ctr,
             })
+
+    if incomplete_spectra:
+        st.error("Completa el espectro de 100 a 3150 Hz para: " + ", ".join(incomplete_spectra))
+        return
 
     used_area = sum(item["area"] for item in components)
     if abs(used_area - facade_area) > 0.05:
@@ -8067,6 +8125,10 @@ def app_fachada_iso():
         "frecuencias": list(map(float, result["freqs"])),
         "curva": list(map(float, result["curve"])),
         "componentes": component_rows,
+        "espectros_componentes": [
+            {"nombre": item["name"], "frecuencias": item["freqs"].tolist(), "curva": item["curve"].tolist()}
+            for item in components
+        ],
         "descripcion": "Predicción espectral de fachada; clasificación ISO/TS 19488 a cargo del usuario.",
     }, key_prefix="save_facade")
 
