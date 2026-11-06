@@ -8077,7 +8077,7 @@ def app_fachada_iso():
     cards = st.columns(5)
     values = [
         ("Rw compuesto", result["rw_composite"], "dB"),
-        ("C / Ctr", result["c_composite"], f"/ {result['ctr_composite']:.0f} dB"),
+        ("C / Ctr del R compuesto", result["c_composite"], f"/ {result['ctr_composite']:.0f} dB"),
         ("RA,tr compuesto", result["ratr_composite"], "dB"),
         ("Corrección geométrica", result["geometry_correction"], "dB"),
         ("D2m,nT,Atr", result["dnt_a_tr"], "dB"),
@@ -8086,6 +8086,13 @@ def app_fachada_iso():
         with col:
             st.metric(label, f"{value:.1f} {unit}")
 
+    st.markdown("##### Descriptores de la curva de fachada D₂m,nT")
+    facade_cards = st.columns(3)
+    for column, (label, key) in zip(facade_cards, (
+        ("D₂m,nT,w", "weighted"), ("C de D₂m,nT", "c"), ("Ctr de D₂m,nT", "ctr"),
+    )):
+        column.metric(label, f"{d_numbers[key]:.0f} dB")
+    st.caption("D₂m,nT,Atr = D₂m,nT,w + Ctr de la curva D₂m,nT. Usa estos descriptores en la ficha de fachada.")
     st.metric("Nivel interior estimado", f"{result['indoor_from_lden']:.1f} dB(A)")
 
     fig = go.Figure()
@@ -8119,6 +8126,9 @@ def app_fachada_iso():
         "resultado_label": f"D2m,nT,Atr {result['dnt_a_tr']:.1f} dB",
         "valor": float(result["dnt_a_tr"]),
         "d2mntw": float(d_numbers["weighted"]),
+        "d2mnt_c": float(d_numbers["c"]),
+        "d2mnt_ctr": float(d_numbers["ctr"]),
+        "curva_d2mnt": detailed["d2mnt_curve"].tolist(),
         "d2mnt_atr": float(result["dnt_a_tr"]),
         "rw_compuesto": float(result["rw_composite"]),
         "ratr_compuesto": float(result["ratr_composite"]),
