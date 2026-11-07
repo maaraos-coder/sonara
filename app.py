@@ -10057,10 +10057,9 @@ def app_proyectos():
     if new_col.button("Nuevo", use_container_width=True):
         st.session_state["new_project_draft"] = True
         st.session_state["reset_project_create"] = True
-        st.session_state.pop("open_project_panel", None)
         st.rerun()
     drafting = st.session_state.get("new_project_draft", False) or current is None
-    save_requested = save_col.button("Guardar", use_container_width=True, help="Guarda en tu cuenta.")
+    save_requested = save_col.button("Guardar", use_container_width=True)
     if drafting:
         export_col.button("Guardar como JSON", disabled=True, use_container_width=True)
     else:
@@ -10072,51 +10071,51 @@ def app_proyectos():
             help="Descarga el proyecto tal como quedó en el último guardado.",
             use_container_width=True,
         )
-    if open_col.button("Abrir", use_container_width=True):
-        st.session_state["open_project_panel"] = not st.session_state.get("open_project_panel", False)
-
     def open_project(project_id):
         st.session_state["active_project_id"] = project_id
         for key in ("active_requirement_id", "active_requirement", "design_req_select",
-                    "new_project_draft", "open_project_panel",
+                    "new_project_draft",
                     "selected_solution_for_optimizer", "selected_requirement_for_optimizer",
                     "selected_solution_for_cubicacion"):
             st.session_state.pop(key, None)
         st.rerun()
 
-    if st.session_state.get("open_project_panel"):
-        with st.container(border=True):
-            options = get_project_options()
-            if options:
-                names = dict(options)
-                selected = st.selectbox(
-                    "Proyectos de tu cuenta", list(names), index=None, placeholder="Selecciona un proyecto",
-                    format_func=lambda key: names[key], key="project_open_selection",
-                )
-                if st.button("Abrir proyecto seleccionado", disabled=selected is None):
-                    open_project(selected)
+    @st.dialog("Abrir proyecto")
+    def show_open_project():
+        options = get_project_options()
+        if options:
+            names = dict(options)
+            selected = st.selectbox(
+                "Proyectos de tu cuenta", list(names), index=None, placeholder="Selecciona un proyecto",
+                format_func=lambda key: names[key], key="project_open_selection",
+            )
+            if st.button("Abrir proyecto seleccionado", disabled=selected is None):
+                open_project(selected)
+        else:
+            st.info("Tu cuenta todavía no tiene proyectos guardados.")
+        uploaded = st.file_uploader("Abrir desde un archivo JSON de SONARA", type=["json"], key="project_open_json")
+        if st.button("Importar y abrir", disabled=uploaded is None):
+            try:
+                projects = load_projects()
+                imported_id, imported_project = read_single_project(uploaded.getvalue())
+                if imported_id in projects and projects[imported_id] != imported_project:
+                    raise ValueError("Ya existe una versión distinta de este proyecto. Abre la versión de tu cuenta desde el selector.")
+            except (ValueError, UnicodeError) as exc:
+                st.error(str(exc))
             else:
-                st.info("Tu cuenta todavía no tiene proyectos guardados.")
-            uploaded = st.file_uploader("Abrir desde un archivo JSON de SONARA", type=["json"], key="project_open_json")
-            if st.button("Importar y abrir", disabled=uploaded is None):
-                try:
-                    projects = load_projects()
-                    imported_id, imported_project = read_single_project(uploaded.getvalue())
-                    if imported_id in projects and projects[imported_id] != imported_project:
-                        raise ValueError("Ya existe una versión distinta de este proyecto. Abre la versión de tu cuenta desde el selector.")
-                except (ValueError, UnicodeError) as exc:
-                    st.error(str(exc))
-                else:
-                    if imported_id not in projects:
-                        allowed, message = can_create_project()
-                        if not allowed:
-                            st.error(message)
-                        else:
-                            projects[imported_id] = imported_project
-                            save_projects(projects)
-                            open_project(imported_id)
+                if imported_id not in projects:
+                    allowed, message = can_create_project()
+                    if not allowed:
+                        st.error(message)
                     else:
+                        projects[imported_id] = imported_project
+                        save_projects(projects)
                         open_project(imported_id)
+                else:
+                    open_project(imported_id)
+
+    if open_col.button("Abrir", use_container_width=True):
+        show_open_project()
 
     def project_fields(values, key):
         nombre = st.text_input("Nombre del proyecto", value=values.get("nombre") or "", key=f"{key}_name")
