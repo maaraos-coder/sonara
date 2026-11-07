@@ -4880,7 +4880,22 @@ def app_impacto():
             "ci50_2500": None if ci50_t is None else float(ci50_t),
             "valor": float(lntw),
             "masa": None if masa_losa is None else round(float(masa_losa), 1),
-            "espesor": None,
+            "espesor": esp_losa,
+            "frecuencias": freqs.tolist(),
+            "curva": lnT.tolist(),
+            "delta_piso_por_banda": delta_piso.tolist(),
+            "delta_cielo_por_banda": delta_cielo.tolist(),
+            "geometria": {
+                "superficie_separador_m2": area_entrepiso,
+                "volumen_receptor_m3": volumen_receptor,
+                "reverberacion_receptor_s": t_receptor,
+                "reverberacion_referencia_s": 0.5,
+            },
+            "flancos": [
+                {key: value.tolist() if isinstance(value, np.ndarray) else value
+                 for key, value in junction.items()}
+                for junction in impact_junctions
+            ] if modo_impacto == "ISO 12354-2" else None,
             "descripcion": f"{modo_impacto} · {tipo_piso} · {tipo_cielo}",
             "modo": modo_impacto,
             "tipo_piso": tipo_piso,
@@ -9854,6 +9869,165 @@ def app_project_calculator_embedded(project, requirement):
         app_lluvia()
 
 
+def render_solution_detail(solution):
+    """Show recorded values, including legacy solutions with partial inputs."""
+    with st.expander("Ficha técnica de la solución", expanded=True):
+        description = solution.get("descripcion")
+        if description:
+            st.write(description)
+        if solution.get("estado_docente"):
+            st.info(solution["estado_docente"])
+
+        labels = {
+            "modo": "Método", "masa": "Masa superficial [kg/m²]",
+            "espesor": "Espesor [mm]", "tipo_piso": "Piso",
+            "tipo_cielo": "Cielo", "ln0w": "Ln,0,w de la losa [dB]",
+            "lntw": "L′ₙT,w [dB]", "lnt50": "L′ₙT,50 [dB]",
+            "dntw": "DₙT,w [dB]", "dnt50": "DₙT,50 [dB]",
+            "superficie_separador_m2": "Área separadora [m²]",
+            "volumen_receptor_m3": "Volumen receptor [m³]",
+            "reverberacion_receptor_s": "TR receptor [s]",
+            "reverberacion_referencia_s": "TR de referencia [s]",
+        }
+        fields = {**solution, **(solution.get("geometria") or {})}
+        rows = [(label, str(fields[key])) for key, label in labels.items()
+                if fields.get(key) is not None]
+        if rows:
+            st.dataframe(pd.DataFrame(rows, columns=["Parámetro", "Valor"]), hide_index=True)
+
+        frequencies = solution.get("frecuencias") or solution.get("frecuencias_hz") or []
+        spectra = {
+            "curva": "Curva final [dB]",
+            "dnt_por_banda_db": "DₙT [dB]",
+            "delta_piso_por_banda": "ΔL piso [dB]",
+            "delta_cielo_por_banda": "ΔL cielo [dB]",
+            "curva_base_con_flancos": "Base con flancos [dB]",
+        }
+        columns = {"Hz": frequencies}
+        for key, label in spectra.items():
+            curve = solution.get(key)
+            if frequencies and isinstance(curve, list) and len(curve) == len(frequencies):
+                columns[label] = curve
+        if len(columns) > 1:
+            st.dataframe(pd.DataFrame(columns), hide_index=True)
+
+        with st.expander("Registro guardado · materiales, flancos y otros datos"):
+            st.json(solution, expanded=1)
+
+
+def impact_reload_missing(solution):
+    """An exact reload needs the saved geometry and both treatment spectra."""
+    geometry = solution.get("geometria") or {}
+    missing = [label for key, label in (
+        ("superficie_separador_m2", "área separadora"),
+        ("volumen_receptor_m3", "volumen receptor"),
+        ("reverberacion_receptor_s", "TR receptor"),
+        ("reverberacion_referencia_s", "TR de referencia"),
+    ) if not isinstance(geometry.get(key), (int, float))
+        or not math.isfinite(geometry[key]) or geometry[key] <= 0]
+    if not isinstance(solution.get("ln0w"), (int, float)) or not math.isfinite(solution["ln0w"]):
+        missing.append("nivel de impacto de la losa")
+    if solution.get("frecuencias") != impact_freqs().tolist():
+        missing.append("grilla de 19 bandas")
+    for key, label in (
+        ("delta_piso_por_banda", "curva ΔL del piso"),
+        ("delta_cielo_por_banda", "curva ΔL del cielo"),
+    ):
+        curve = solution.get(key)
+        if not isinstance(curve, list) or len(curve) != len(impact_freqs()) or not all(
+            isinstance(value, (int, float)) and math.isfinite(value) for value in curve
+        ):
+            missing.append(label)
+    flanks = solution.get("flancos")
+    if not isinstance(flanks, list) or any(
+        not isinstance(flank, dict)
+        or not {"source_curve", "receiver_curve", "length", "kij"} <= flank.keys()
+        for flank in flanks
+    ):
+        missing.append("configuración de flancos")
+    return missing
+
+
+def render_reloaded_impact(solution, project_id, requirement):
+    """Edit a draft using the original spectral model and save it as a new solution."""
+    st.subheader("Copia de diseño · Impacto ISO 12354-2")
+    st.write(solution.get("nombre", "Solución guardada"))
+    if st.button("Cerrar copia y volver al formulario de diseño", key="impact_reload_close"):
+        st.session_state.pop("impact_reload", None)
+        st.rerun()
+    if solution.get("estado_docente"):
+        st.info(solution["estado_docente"])
+    prefix = f"impact_reload_{project_id}_{requirement['id']}_{solution.get('id', '')}"
+    geometry = solution["geometria"]
+    area_col, vol_col, tr_col = st.columns(3)
+    area = area_col.number_input("Área separadora [m²]", min_value=0.01,
+                                value=float(geometry["superficie_separador_m2"]), key=f"{prefix}_area")
+    volume = vol_col.number_input("Volumen receptor [m³]", min_value=0.01,
+                                 value=float(geometry["volumen_receptor_m3"]), key=f"{prefix}_volume")
+    receiver_t = tr_col.number_input("TR receptor [s]", min_value=0.05, step=0.01,
+                                    value=float(geometry["reverberacion_receptor_s"]), key=f"{prefix}_tr")
+    t0 = float(geometry["reverberacion_referencia_s"])
+    ln0w = st.number_input("Ln,0,w de la losa [dB]", value=float(solution["ln0w"]), key=f"{prefix}_ln0")
+    st.caption(f"TR de referencia: {t0:g} s. Se usan las curvas guardadas para los flancos.")
+    frequencies, base = impact_reference_curve_from_lnw(ln0w)
+    edited = st.data_editor(pd.DataFrame({
+        "Hz": frequencies,
+        "ΔL piso [dB]": solution["delta_piso_por_banda"],
+        "ΔL cielo [dB]": solution["delta_cielo_por_banda"],
+    }), disabled=["Hz"], hide_index=True, key=f"{prefix}_spectra")
+    floor = edited["ΔL piso [dB]"].to_numpy(dtype=float)
+    ceiling = edited["ΔL cielo [dB]"].to_numpy(dtype=float)
+    if not np.isfinite(floor).all() or not np.isfinite(ceiling).all():
+        st.warning("Completa los 19 valores de ΔL del piso y del cielo.")
+        return
+    junctions = solution["flancos"]
+    if junctions:
+        with st.expander("Flancos recuperados · uniones y curvas por banda"):
+            st.dataframe(pd.DataFrame([
+                {
+                    "Flanco": flank.get("name", f"Unión {index}"),
+                    "Longitud [m]": flank["length"], "Kij [dB]": flank["kij"],
+                    "Unión": flank.get("junction_type"),
+                    "Masa emisor [kg/m²]": flank.get("mass_source"),
+                    "Masa receptor [kg/m²]": flank.get("mass_receiver"),
+                }
+                for index, flank in enumerate(junctions, start=1)
+            ]), hide_index=True)
+            st.json(junctions, expanded=False)
+    result = impact_detailed(base, frequencies, floor_improvement=floor, ceiling_improvement=ceiling,
+                             separating_area=area, receiver_t=receiver_t, junctions=junctions, t0=t0)
+    curve = result["normalized_curve"]
+    indices = impact_rating(frequencies, curve)
+    lntw = indices["weighted"]
+    lnt50 = lntw + indices["ci50_2500"]
+    st.write(f"L′ₙT,w = **{lntw} dB** · L′ₙT,50 = **{lnt50} dB**")
+    st.dataframe(pd.DataFrame({"Hz": frequencies, "L′ₙT calculado [dB]": curve}), hide_index=True)
+
+    updated = dict(solution)
+    updated.pop("curva_base_con_flancos", None)
+    updated.update(
+        nombre=f"{solution.get('nombre', 'Impacto')} · copia",
+        geometria={**geometry, "superficie_separador_m2": area, "volumen_receptor_m3": volume,
+                   "reverberacion_receptor_s": receiver_t},
+        ln0w=ln0w, lnw=impact_rating(frequencies, result["total_curve"])["weighted"],
+        lntw=lntw, lnt50=lnt50, valor=lntw, ci=indices["ci"],
+        ci50_2500=indices["ci50_2500"], curva=curve.tolist(),
+        delta_piso_por_banda=floor.tolist(), delta_cielo_por_banda=ceiling.tolist(),
+        delta_lw_piso=float(ln0w - impact_rating(frequencies, base - floor)["weighted"]),
+        resultado_label=f"L′ₙT,w {lntw} dB · L′ₙT,50 {lnt50} dB",
+    )
+    if not np.array_equal(floor, solution["delta_piso_por_banda"]):
+        updated.pop("revestimiento_catalogo_id", None)
+        updated["tipo_piso"] = "Curva ΔL personalizada"
+    if not np.array_equal(ceiling, solution["delta_cielo_por_banda"]):
+        updated["tipo_cielo"] = "Curva ΔL personalizada"
+    updated["descripcion"] = f"ISO 12354-2 · {updated.get('tipo_piso', 'Piso')} · {updated.get('tipo_cielo', 'Cielo')}"
+    updated["estado_docente"] = "Predicción recalculada en Diseño. " + solution.get("estado_docente", "")
+    solution_save_widget(updated, key_prefix=prefix, target_project_id=project_id,
+                         target_requirement_id=requirement["id"],
+                         target_requirement_label=requirement.get("elemento"))
+
+
 def app_proyectos():
     st.markdown(
         "<h1 style='color:#FFFFFF;margin-bottom:8px;'>Proyecto</h1>",
@@ -10132,11 +10306,19 @@ def app_proyectos():
                 for i, r in enumerate(reqs):
                     if active_req and r.get("id") == active_req.get("id"):
                         default_idx = i
+                reload_target = st.session_state.pop("impact_reload_target", None)
+                for index, item in enumerate(reqs):
+                    if reload_target and item.get("id") == reload_target:
+                        st.session_state["design_req_select"] = labels[index]
+                        break
                 selected_label = st.selectbox("Elemento activo a diseñar", labels, index=default_idx, key="design_req_select")
                 req = reqs[labels.index(selected_label)]
                 st.session_state["active_requirement_id"] = req.get("id")
                 st.session_state["active_requirement"] = req
-                if req:
+                draft = st.session_state.get("impact_reload")
+                if draft and (draft["project"], draft["requirement"]) == (pid, req.get("id")):
+                    render_reloaded_impact(draft["solution"], pid, req)
+                elif req:
                     app_project_calculator_embedded(p, req)
                 else:
                     st.warning("Primero agrega un elemento a diseñar en la matriz acústica.")
@@ -10170,8 +10352,28 @@ def app_proyectos():
                         estado, delta = solution_status(sol, selected_req)
                         rows.append({"Nombre": sol.get("nombre"), "Tipo": sol.get("tipo_calculo"), "Resultado": sol.get("resultado_label"), "Estado": estado, "Δ": delta, "Fecha": sol.get("created_at")})
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                    sel = st.selectbox("Seleccionar solución", [r["Nombre"] for r in rows], key="sol_pick_v1")
-                    sol = sols[[r["Nombre"] for r in rows].index(sel)]
+                    selected_index = st.selectbox(
+                        "Seleccionar solución", range(len(sols)),
+                        format_func=lambda index: rows[index]["Nombre"],
+                        key=f"solution_pick_{pid}_{selected_req['id']}",
+                    )
+                    sol = sols[selected_index]
+                    render_solution_detail(sol)
+                    if sol.get("modo") == "ISO 12354-2":
+                        missing = impact_reload_missing(sol)
+                        if missing:
+                            st.caption("Faltan datos para reconstruir esta corrida: " + ", ".join(missing) + ".")
+                        elif st.button("Abrir copia en Diseño", key="solution_open_impact"):
+                            st.session_state["impact_reload"] = {
+                                "project": pid, "requirement": selected_req["id"], "solution": sol,
+                            }
+                            st.session_state["impact_reload_target"] = selected_req["id"]
+                            st.rerun()
+                        draft = st.session_state.get("impact_reload")
+                        if draft and draft["project"] == pid and draft["solution"].get("id") == sol.get("id"):
+                            st.success("Copia preparada. Abre la pestaña Diseñar para editarla y recalcular.")
+                    else:
+                        st.caption("La recarga de entradas está disponible para impacto ISO 12354-2.")
                     c1, c2, c3 = st.columns(3)
                     with c1:
                         if st.button("🧠 Optimizar", use_container_width=True, key="opt_from_sol_v1"):
