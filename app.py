@@ -10189,37 +10189,49 @@ def app_proyectos():
 
     @st.dialog("Abrir proyecto")
     def show_open_project():
-        options = get_project_options()
-        if options:
-            names = dict(options)
-            selected = st.selectbox(
-                "Proyectos de tu cuenta", list(names), index=None, placeholder="Selecciona un proyecto",
-                format_func=lambda key: names[key], key="project_open_selection",
-            )
-            if st.button("Abrir proyecto seleccionado", disabled=selected is None):
-                open_project(selected)
-        else:
-            st.info("Tu cuenta todavía no tiene proyectos guardados.")
-        uploaded = st.file_uploader("Abrir desde un archivo JSON de SONARA", type=["json"], key="project_open_json")
-        if st.button("Importar y abrir", disabled=uploaded is None):
-            try:
-                projects = load_projects()
-                imported_id, imported_project = read_single_project(uploaded.getvalue())
-                if imported_id in projects and projects[imported_id] != imported_project:
-                    raise ValueError("Ya existe una versión distinta de este proyecto. Abre la versión de tu cuenta desde el selector.")
-            except (ValueError, UnicodeError) as exc:
-                st.error(str(exc))
+        saved_tab, import_tab = st.tabs(["De mi cuenta", "Importar JSON"])
+        with saved_tab:
+            st.caption("Selecciona un proyecto de tu cuenta y pulsa Abrir proyecto guardado.")
+            options = get_project_options()
+            if options:
+                names = dict(options)
+                counts = {}
+                for name in names.values():
+                    counts[name] = counts.get(name, 0) + 1
+                labels = {
+                    key: f"{name} · {key}" if counts[name] > 1 else name
+                    for key, name in names.items()
+                }
+                selected = st.selectbox(
+                    "Proyecto guardado", list(names), index=None, placeholder="Selecciona un proyecto",
+                    format_func=lambda key: labels[key], key="project_open_selection",
+                )
+                if st.button("Abrir proyecto guardado", disabled=selected is None, use_container_width=True):
+                    open_project(selected)
             else:
-                if imported_id not in projects:
-                    allowed, message = can_create_project()
-                    if not allowed:
-                        st.error(message)
-                    else:
-                        projects[imported_id] = imported_project
-                        save_projects(projects)
-                        open_project(imported_id)
+                st.info("Tu cuenta todavía no tiene proyectos guardados.")
+        with import_tab:
+            st.caption("Usa esta opción para incorporar un archivo de respaldo a tu cuenta.")
+            uploaded = st.file_uploader("Abrir desde un archivo JSON de SONARA", type=["json"], key="project_open_json")
+            if st.button("Importar y abrir", disabled=uploaded is None):
+                try:
+                    projects = load_projects()
+                    imported_id, imported_project = read_single_project(uploaded.getvalue())
+                    if imported_id in projects and projects[imported_id] != imported_project:
+                        raise ValueError("Ya existe una versión distinta de este proyecto. Abre la versión de tu cuenta desde el selector.")
+                except (ValueError, UnicodeError) as exc:
+                    st.error(str(exc))
                 else:
-                    open_project(imported_id)
+                    if imported_id not in projects:
+                        allowed, message = can_create_project()
+                        if not allowed:
+                            st.error(message)
+                        else:
+                            projects[imported_id] = imported_project
+                            save_projects(projects)
+                            open_project(imported_id)
+                    else:
+                        open_project(imported_id)
 
     if open_col.button("Abrir", use_container_width=True):
         show_open_project()
