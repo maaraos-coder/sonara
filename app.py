@@ -8765,6 +8765,15 @@ def enable_free_calculator_drag():
     const dialog = frame?.closest('[role="dialog"]');
     const handle = dialog?.querySelector('h1, h2, h3, [data-testid="stDialogHeader"]');
     if (!handle || handle.dataset.sonaraDragBound) return;
+
+    // The accessible dialog is the inner content; the overlay's child is the visible frame.
+    const overlay = dialog.closest('[data-testid="stDialog"]');
+    let panel = dialog;
+    if (overlay && overlay !== dialog) {
+        while (panel.parentElement && panel.parentElement !== overlay) {
+            panel = panel.parentElement;
+        }
+    }
     handle.dataset.sonaraDragBound = '1';
     handle.style.cursor = 'grab';
     handle.style.touchAction = 'none';
@@ -8778,19 +8787,20 @@ def enable_free_calculator_drag():
         handle.style.cursor = 'grabbing';
         const startX = event.clientX;
         const startY = event.clientY;
-        const previousX = Number(dialog.dataset.sonaraDragX || 0);
-        const previousY = Number(dialog.dataset.sonaraDragY || 0);
-        const bounds = dialog.getBoundingClientRect();
+        const previousX = Number(panel.dataset.sonaraDragX || 0);
+        const previousY = Number(panel.dataset.sonaraDragY || 0);
+        const bounds = panel.getBoundingClientRect();
         const title = handle.getBoundingClientRect();
         const viewport = dialog.ownerDocument.documentElement;
         const move = (pointer) => {
-            const dx = Math.max(80 - bounds.right,
-                Math.min(viewport.clientWidth - 80 - bounds.left, pointer.clientX - startX));
+            const dx = Math.max(8 - bounds.right,
+                Math.min(viewport.clientWidth - 8 - bounds.right, pointer.clientX - startX));
+            const reachableDx = Math.max(80 - title.right, dx);
             const dy = Math.max(8 - title.top,
                 Math.min(viewport.clientHeight - 40 - title.top, pointer.clientY - startY));
-            dialog.dataset.sonaraDragX = previousX + dx;
-            dialog.dataset.sonaraDragY = previousY + dy;
-            dialog.style.translate = (previousX + dx) + 'px ' + (previousY + dy) + 'px';
+            panel.dataset.sonaraDragX = previousX + reachableDx;
+            panel.dataset.sonaraDragY = previousY + dy;
+            panel.style.translate = (previousX + reachableDx) + 'px ' + (previousY + dy) + 'px';
         };
         handle.addEventListener('pointermove', move);
         handle.addEventListener('lostpointercapture', () => {
