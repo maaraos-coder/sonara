@@ -9301,6 +9301,10 @@ def solution_save_widget(solution, key_prefix="save_solution", *,
         )
         return
 
+    notice_key = f"{key_prefix}_saved_notice"
+    notice = st.session_state.pop(notice_key, None)
+    if notice:
+        st.success(notice)
     with st.expander("💾 Guardar solución en proyecto", expanded=False):
         labels = [name for _, name in options]
         ids = [pid for pid, _ in options]
@@ -9326,7 +9330,8 @@ def solution_save_widget(solution, key_prefix="save_solution", *,
 
         if st.button("Guardar en proyecto", use_container_width=True, key=f"{key_prefix}_btn"):
             if save_solution_to_project(project_id, solution, requirement_id=target_requirement_id):
-                st.success(f"Solución guardada en {project_label}.")
+                st.session_state[notice_key] = f"Solución guardada en {project_label}."
+                st.rerun()
             else:
                 st.error("No se pudo guardar la solución.")
 
@@ -9962,6 +9967,7 @@ def project_report_dataframe(project):
 
 
 
+@st.fragment
 def app_project_calculator_embedded(project, requirement):
     """
     Calculadora interna del proyecto.
@@ -9980,6 +9986,8 @@ def app_project_calculator_embedded(project, requirement):
     )
 
     objetivo = requirement or project.get("requerimiento_activo") or {}
+    st.session_state["active_requirement_id"] = objetivo.get("id")
+    st.session_state["active_requirement"] = objetivo
     indicador = objetivo.get("indicador", "Rw")
     tipo_elemento_req = objetivo.get("tipo_elemento", "Paramento vertical")
 
