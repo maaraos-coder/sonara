@@ -8993,42 +8993,52 @@ def make_project_id(nombre):
     return clean[:50]
 
 
-def upsert_project(nombre, tipo, norma, objetivo):
+def create_project(nombre, cliente, tipo, norma, objetivo):
+    allowed, msg = can_create_project()
+    if not allowed:
+        st.error(msg)
+        return None
+
     projects = load_projects()
-    pid = make_project_id(nombre)
+    base_id = make_project_id(nombre)
+    pid = base_id
+    suffix = 2
+    while pid in projects:
+        pid = f"{base_id}_{suffix}"
+        suffix += 1
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    if pid not in projects:
-        allowed, msg = can_create_project()
-        if not allowed:
-            st.error(msg)
-            return None
-
-        projects[pid] = {
-            "id": pid,
-            "nombre": nombre,
-            "tipo": tipo,
-            "norma": norma,
-            "objetivo": objetivo,
-            "created_at": now,
-            "updated_at": now,
-            "soluciones": [],
-            "requerimientos": [],
-        }
-    else:
-        projects[pid].update({
-            "nombre": nombre,
-            "tipo": tipo,
-            "norma": norma,
-            "objetivo": objetivo,
-            "updated_at": now,
-        })
-        projects[pid].setdefault("soluciones", [])
-        projects[pid].setdefault("requerimientos", [])
-
+    projects[pid] = {
+        "id": pid,
+        "nombre": nombre,
+        "cliente": cliente,
+        "tipo": tipo,
+        "norma": norma,
+        "objetivo": objetivo,
+        "created_at": now,
+        "updated_at": now,
+        "recintos": [],
+        "soluciones": [],
+        "requerimientos": [],
+        "requerimiento_activo": {},
+    }
     save_projects(projects)
     st.session_state["active_project_id"] = pid
+    for state_key in ("active_requirement_id", "active_requirement", "design_req_select"):
+        st.session_state.pop(state_key, None)
     return pid
+
+
+def update_project_metadata(project_id, nombre, cliente, tipo, norma):
+    projects = load_projects()
+    if project_id not in projects:
+        st.error("Vuelve a abrir el proyecto antes de guardar los cambios.")
+        return False
+    projects[project_id].update(
+        nombre=nombre, cliente=cliente, tipo=tipo, norma=norma,
+        updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+    )
+    save_projects(projects)
+    return True
 
 
 def active_project():
@@ -10025,6 +10035,7 @@ def app_proyectos():
             project_ids,
             index=project_ids.index(current_project_id) if current_project_id in project_ids else 0,
             format_func=lambda project_id: project_names[project_id],
+            key=f"saved_project_picker_{current_project_id}",
         )
         if chosen_project_id != current_project_id:
             st.session_state["active_project_id"] = chosen_project_id
@@ -10048,37 +10059,61 @@ def app_proyectos():
         col1, col2 = st.columns([0.9, 1.3], gap="large")
         with col1:
             st.markdown("<div class='sonara-card-title'>Datos del proyecto</div>", unsafe_allow_html=True)
-            nombre = st.text_input("Nombre del proyecto", value=st.session_state.get("project_nombre", "Proyecto SONARA"), key="project_v1_nombre")
-            cliente = st.text_input("Cliente / mandante", value=st.session_state.get("project_cliente", ""), key="project_v1_cliente")
-            sectores = sorted(df_targets["sector"].unique().tolist())
-            tipo = st.selectbox("Tipo de proyecto", sectores, index=sectores.index(st.session_state.get("project_tipo", "Vivienda")) if st.session_state.get("project_tipo", "Vivienda") in sectores else 0, key="project_v1_tipo")
-            normas = ["Todas"] + sorted(df_targets[df_targets["sector"] == tipo]["norma"].unique().tolist())
-            norma = st.selectbox("Norma / referencia principal", normas, key="project_v1_norma")
-            if st.button("💾 Crear / actualizar proyecto", use_container_width=True, key="project_v1_save"):
-                df_base = df_targets[df_targets["sector"] == tipo].copy()
-                if norma != "Todas":
-                    df_base = df_base[df_base["norma"] == norma].copy()
-                if df_base.empty:
-                    df_base = df_targets[df_targets["sector"] == tipo].copy()
-                r0 = df_base.iloc[0]
-                objetivo_default = {
-                    "sector": r0["sector"], "norma": r0["norma"], "elemento": r0["elemento"],
-                    "indicador": r0["indicador"], "sentido": r0["sentido"], "valor": float(r0["valor"]),
-                    "unidad": r0["unidad"], "fuente": r0["fuente"],
-                    "recinto_emisor": "", "recinto_receptor": "", "tipo_elemento": "Paramento vertical",
-                }
-                pid = upsert_project(nombre, tipo, norma, objetivo_default)
-                if pid:
-                    projects = load_projects()
-                    projects[pid]["cliente"] = cliente
-                    projects[pid].setdefault("recintos", [])
-                    projects[pid]["requerimientos"] = project_requirements(projects[pid])
-                    projects[pid]["requerimiento_activo"] = {}
-                    save_projects(projects)
-                    st.session_state["project_nombre"] = nombre
-                    st.session_state["project_cliente"] = cliente
-                    st.session_state["project_tipo"] = tipo
-                    st.success(f"Proyecto activo: {nombre}")
+            pid, current = active_project()
+            notice = st.session_state.pop("project_metadata_notice", None)
+            if notice:
+                st.success(notice)
+            if st.session_state.pop("reset_project_create", False):
+                for key in list(st.session_state):
+                    if key.startswith("project_create_"):
+                        st.session_state.pop(key, None)
+
+            def project_fields(values, key):
+                nombre = st.text_input("Nombre del proyecto", value=values.get("nombre") or "", key=f"{key}_name")
+                cliente = st.text_input("Cliente / mandante", value=values.get("cliente") or "", key=f"{key}_client")
+                sectores = sorted(df_targets["sector"].unique().tolist())
+                saved_type = values.get("tipo") or "Vivienda"
+                tipos = sectores if saved_type in sectores or not values else [saved_type, *sectores]
+                tipo = st.selectbox("Tipo de proyecto", tipos,
+                                    index=tipos.index(saved_type) if saved_type in tipos else 0, key=f"{key}_type")
+                normas = ["Todas"] + sorted(df_targets[df_targets["sector"] == tipo]["norma"].unique().tolist())
+                saved_norm = (values.get("norma") or "Todas") if tipo == saved_type else "Todas"
+                if saved_norm not in normas:
+                    normas.append(saved_norm)
+                norma = st.selectbox("Norma / referencia principal", normas,
+                                     index=normas.index(saved_norm), key=f"{key}_norm_{tipo}")
+                return nombre.strip(), cliente.strip(), tipo, norma
+
+            if current:
+                st.caption("Edita los datos generales del proyecto abierto. Sus recintos, objetivos y soluciones se conservan.")
+                fields = project_fields(current, f"project_edit_{pid}")
+                if st.button("Guardar cambios del proyecto", use_container_width=True, key=f"save_metadata_{pid}"):
+                    if not fields[0]:
+                        st.error("Ingresa un nombre para el proyecto.")
+                    elif update_project_metadata(pid, *fields):
+                        st.session_state["project_metadata_notice"] = "Datos del proyecto guardados."
+                        st.rerun()
+
+            with st.expander("Nuevo proyecto", expanded=current is None):
+                nombre, cliente, tipo, norma = project_fields({}, "project_create")
+                if st.button("Crear nuevo proyecto", use_container_width=True, key="create_project"):
+                    if not nombre:
+                        st.error("Ingresa un nombre para el proyecto nuevo.")
+                    else:
+                        df_base = df_targets[df_targets["sector"] == tipo]
+                        if norma != "Todas":
+                            df_base = df_base[df_base["norma"] == norma]
+                        r0 = df_base.iloc[0]
+                        objetivo_default = {
+                            "sector": r0["sector"], "norma": r0["norma"], "elemento": r0["elemento"],
+                            "indicador": r0["indicador"], "sentido": r0["sentido"], "valor": float(r0["valor"]),
+                            "unidad": r0["unidad"], "fuente": r0["fuente"],
+                            "recinto_emisor": "", "recinto_receptor": "", "tipo_elemento": "Paramento vertical",
+                        }
+                        if create_project(nombre, cliente, tipo, norma, objetivo_default):
+                            st.session_state["project_metadata_notice"] = "Proyecto nuevo creado."
+                            st.session_state["reset_project_create"] = True
+                            st.rerun()
 
         with col2:
             pid, p = active_project()
