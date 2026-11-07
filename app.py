@@ -686,6 +686,7 @@ div[data-baseweb="popover"] [role="option"][aria-selected="true"] {
 /* Botones */
 
 .stButton > button,
+[data-testid="stSidebar"] .stLinkButton a,
 .stDownloadButton > button,
 div[data-testid="stDownloadButton"] button {
     background: linear-gradient(90deg, #0A84FF, #0057B8) !important;
@@ -699,6 +700,7 @@ div[data-testid="stDownloadButton"] button {
 }
 
 .stButton > button:hover,
+[data-testid="stSidebar"] .stLinkButton a:hover,
 .stDownloadButton > button:hover,
 div[data-testid="stDownloadButton"] button:hover {
     background: linear-gradient(90deg, #26A8FF, #0A63CA) !important;
@@ -1008,7 +1010,8 @@ section[data-testid="stSidebar"] img {
 }
 
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+section[data-testid="stSidebar"] div[data-testid="stButton"] button,
+section[data-testid="stSidebar"] .stLinkButton a {
     min-height: 54px !important;
     padding: 10px 14px !important;
     border-radius: 14px !important;
@@ -1616,6 +1619,35 @@ def get_license(email):
 # SIDEBAR Y PORTADA
 # =========================================================
 
+FREE_CALCULATOR_QUERY = "sonara_calculator"
+
+
+def sidebar_free_calculator(label):
+    with st.sidebar:
+        st.link_button(label, f"?{FREE_CALCULATOR_QUERY}=1", use_container_width=True)
+        components.html(f"""
+<script>
+(() => {{
+    const appWindow = window.parent;
+    const sidebar = window.frameElement?.closest('[data-testid="stSidebar"]');
+    if (!sidebar || sidebar.dataset.sonaraCalculatorPopup) return;
+    sidebar.dataset.sonaraCalculatorPopup = '1';
+
+    sidebar.addEventListener('click', (event) => {{
+        const link = event.target.closest('a[href="?{FREE_CALCULATOR_QUERY}=1"]');
+        if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        const popup = appWindow.open(link.href, '_blank',
+            'popup,width=1100,height=800,resizable=yes,scrollbars=yes');
+        if (!popup) return;
+        popup.opener = null;
+        event.preventDefault();
+        popup.focus();
+    }});
+}})();
+</script>
+""", height=0)
+
+
 def sidebar(license_info=None):
     logo = ensure_sonara_logo()
 
@@ -1645,12 +1677,11 @@ def sidebar(license_info=None):
 
 
     for icon, label in menu_items:
-        if st.sidebar.button(f"{icon}   {label}", key=f"nav_{label}", use_container_width=True):
-            if label == "Calculadora libre":
-                st.session_state["open_free_calculator_requested"] = True
-            else:
-                st.session_state.page = label
-                st.rerun()
+        if label == "Calculadora libre":
+            sidebar_free_calculator(f"{icon}   {label}")
+        elif st.sidebar.button(f"{icon}   {label}", key=f"nav_{label}", use_container_width=True):
+            st.session_state.page = label
+            st.rerun()
 
     if license_info:
         if st.sidebar.button("🚪   Cerrar sesión", key="nav_logout", use_container_width=True):
@@ -8757,88 +8788,13 @@ FREE_CALCULATOR_MODULES = {
 }
 
 
-def enable_free_calculator_drag():
-    components.html("""
-<script>
-(() => {
-    const frame = window.frameElement;
-    const dialog = frame?.closest('[role="dialog"]');
-    const handle = dialog?.querySelector('h1, h2, h3, [data-testid="stDialogHeader"]');
-    if (!handle || handle.dataset.sonaraDragBound) return;
-
-    // The accessible dialog is the inner content; the overlay's child is the visible frame.
-    const overlay = dialog.closest('[data-testid="stDialog"]');
-    let panel = dialog;
-    if (overlay && overlay !== dialog) {
-        while (panel.parentElement && panel.parentElement !== overlay) {
-            panel = panel.parentElement;
-        }
-    }
-    handle.dataset.sonaraDragBound = '1';
-    handle.style.cursor = 'grab';
-    handle.style.touchAction = 'none';
-    handle.style.userSelect = 'none';
-
-    handle.addEventListener('pointerdown', (event) => {
-        if (!event.isPrimary || event.button !== 0 ||
-            event.target.closest('button, a')) return;
-        event.preventDefault();
-        handle.setPointerCapture(event.pointerId);
-        handle.style.cursor = 'grabbing';
-        const startX = event.clientX;
-        const startY = event.clientY;
-        const previousX = Number(panel.dataset.sonaraDragX || 0);
-        const previousY = Number(panel.dataset.sonaraDragY || 0);
-        const bounds = panel.getBoundingClientRect();
-        const title = handle.getBoundingClientRect();
-        const viewport = dialog.ownerDocument.documentElement;
-        const move = (pointer) => {
-            const dx = Math.max(8 - bounds.right,
-                Math.min(viewport.clientWidth - 8 - bounds.right, pointer.clientX - startX));
-            const reachableDx = Math.max(80 - title.right, dx);
-            const dy = Math.max(8 - title.top,
-                Math.min(viewport.clientHeight - 40 - title.top, pointer.clientY - startY));
-            panel.dataset.sonaraDragX = previousX + reachableDx;
-            panel.dataset.sonaraDragY = previousY + dy;
-            panel.style.translate = (previousX + reachableDx) + 'px ' + (previousY + dy) + 'px';
-        };
-        handle.addEventListener('pointermove', move);
-        handle.addEventListener('lostpointercapture', () => {
-            handle.removeEventListener('pointermove', move);
-            handle.style.cursor = 'grab';
-        }, {once: true});
-    });
-})();
-</script>
-""", height=0)
-
-
-@st.dialog("Calculadora libre", width="large")
-def open_free_calculator(active_calculator=None):
-    enable_free_calculator_drag()
-    st.caption("Arrastra el encabezado para mover la ventana. Cierra con × para volver a tu cálculo principal.")
-    options = [label for label, calculator in FREE_CALCULATOR_MODULES.items()
-               if calculator is not active_calculator]
-    label = st.selectbox("Tipo de cálculo auxiliar", options, key="floating_free_calculator_mode")
-    FREE_CALCULATOR_MODULES[label]()
-
-
-def maybe_open_free_calculator(active_calculator=None):
-    if st.session_state.pop("open_free_calculator_requested", False):
-        open_free_calculator(active_calculator)
-
-
 def app_calculadora_master():
-    st.markdown(
-        "<h1 style='color:#FFFFFF;margin-bottom:8px;'>Calculadora</h1>",
-        unsafe_allow_html=True
-    )
+    st.title("Calculadora libre")
     label = st.radio(
         "Tipo de cálculo", list(FREE_CALCULATOR_MODULES), horizontal=True, key="calc_master_submodule",
     )
     st.markdown("<hr>", unsafe_allow_html=True)
     calculator = FREE_CALCULATOR_MODULES[label]
-    maybe_open_free_calculator(calculator)
     calculator()
 
 
@@ -10088,31 +10044,22 @@ def app_project_calculator_embedded(project, requirement):
     )
 
     if calc_mode == "Solución compuesta":
-        maybe_open_free_calculator()
         app_composite_solution(project, objetivo)
     elif calc_mode == "Ruido aéreo":
-        maybe_open_free_calculator(app_calculator)
         app_calculator(project, objetivo)
     elif calc_mode == "Ruido de impacto":
-        maybe_open_free_calculator(app_impacto)
         app_impacto()
     elif calc_mode == "ISO 12354-1":
-        maybe_open_free_calculator(app_iso12354)
         app_iso12354(project, objetivo)
     elif calc_mode == "Fachada ISO 12354-3":
-        maybe_open_free_calculator(app_fachada_iso)
         app_fachada_iso()
     elif calc_mode == "Exterior ISO 12354-4":
-        maybe_open_free_calculator(app_exterior_iso)
         app_exterior_iso()
     elif calc_mode == "Instalaciones EN 12354-5":
-        maybe_open_free_calculator(app_instalaciones_iso)
         app_instalaciones_iso()
     elif calc_mode == "Reverberación EN 12354-6":
-        maybe_open_free_calculator(app_reverberacion_iso)
         app_reverberacion_iso()
     else:
-        maybe_open_free_calculator(app_lluvia)
         app_lluvia()
 
 
@@ -10934,8 +10881,9 @@ ensure_files()
 if "license_info" not in st.session_state:
     login_page()
 else:
-    page = sidebar(st.session_state.license_info)
     lic = st.session_state.license_info
+    calculator_window = st.query_params.get(FREE_CALCULATOR_QUERY) == "1"
+    page = "Calculadora libre" if calculator_window else sidebar(lic)
 
     # Alias para sesiones antiguas
     if page == "Proyectos":
@@ -10961,6 +10909,3 @@ else:
         app_ayuda()
     else:
         placeholder(page)
-
-    if lic.get("allowed"):
-        maybe_open_free_calculator()
