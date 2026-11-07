@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta
+from threading import Lock
+from time import monotonic
 import plotly.graph_objects as go
 import textwrap
 import json
@@ -1620,29 +1622,84 @@ def get_license(email):
 # =========================================================
 
 FREE_CALCULATOR_QUERY = "sonara_calculator"
+FREE_CALCULATOR_TICKET = "sonara_ticket"
+FREE_CALCULATOR_TICKET_SECONDS = 120
 
 
+@st.cache_resource
+def calculator_ticket_store():
+    return Lock(), {}
+
+
+def issue_calculator_ticket(email, license_info):
+    lock, tickets = calculator_ticket_store()
+    with lock:
+        now = monotonic()
+        for key, (expires, _, _) in list(tickets.items()):
+            if expires <= now:
+                del tickets[key]
+        ticket = secrets.token_urlsafe(32)
+        tickets[ticket] = (now + FREE_CALCULATOR_TICKET_SECONDS, email, dict(license_info))
+        return ticket
+
+
+def redeem_calculator_ticket():
+    ticket = st.query_params.get(FREE_CALCULATOR_TICKET)
+    if not ticket:
+        return
+    lock, tickets = calculator_ticket_store()
+    with lock:
+        grant = tickets.pop(ticket, None)
+    del st.query_params[FREE_CALCULATOR_TICKET]
+    if grant and grant[0] > monotonic() and grant[2].get("allowed"):
+        _, email, license_info = grant
+        st.session_state.email = email
+        st.session_state.license_info = license_info
+        st.session_state.calculator_window_only = True
+
+
+@st.fragment
 def sidebar_free_calculator(label):
-    with st.sidebar:
-        st.link_button(label, f"?{FREE_CALCULATOR_QUERY}=1", use_container_width=True)
+    with st.container(key="sonara_calculator_launch"):
+        requested = st.button(label, key="nav_free_calculator", use_container_width=True)
+        if requested:
+            ticket = issue_calculator_ticket(st.session_state.email, st.session_state.license_info)
+            url = f"?{FREE_CALCULATOR_QUERY}=1&{FREE_CALCULATOR_TICKET}={ticket}"
+            st.link_button("Abrir en otra pestaña", url, use_container_width=True)
+        else:
+            url = ""
         components.html(f"""
 <script>
 (() => {{
     const appWindow = window.parent;
-    const sidebar = window.frameElement?.closest('[data-testid="stSidebar"]');
-    if (!sidebar || sidebar.dataset.sonaraCalculatorPopup) return;
-    sidebar.dataset.sonaraCalculatorPopup = '1';
+    const launcher = window.frameElement?.closest('.st-key-sonara_calculator_launch');
+    if (!launcher) return;
 
-    sidebar.addEventListener('click', (event) => {{
-        const link = event.target.closest('a[href="?{FREE_CALCULATOR_QUERY}=1"]');
-        if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-        const popup = appWindow.open(link.href, '_blank',
-            'popup,width=1100,height=800,resizable=yes,scrollbars=yes');
-        if (!popup) return;
-        popup.opener = null;
-        event.preventDefault();
-        popup.focus();
-    }});
+    if (!launcher.dataset.popupBound) {{
+        launcher.dataset.popupBound = '1';
+        launcher.addEventListener('click', (event) => {{
+            if (!event.target.closest('button')) return;
+            if (appWindow.sonaraPendingCalculator && !appWindow.sonaraPendingCalculator.closed) {{
+                appWindow.sonaraPendingCalculator.focus();
+                return;
+            }}
+            const popup = appWindow.open('about:blank', '_blank',
+                'popup,width=1100,height=800,resizable=yes,scrollbars=yes');
+            if (!popup) return;
+            popup.document.title = 'SONARA · Calculadora libre';
+            popup.document.body.textContent = 'Abriendo Calculadora libre…';
+            popup.opener = null;
+            appWindow.sonaraPendingCalculator = popup;
+        }}, true);
+    }}
+
+    const url = {json.dumps(url)};
+    const popup = appWindow.sonaraPendingCalculator;
+    if (url && popup && !popup.closed) {{
+        popup.location.replace(new URL(url, appWindow.location.href).href);
+        appWindow.sonaraPendingCalculator = null;
+        launcher.querySelector('[data-testid="stLinkButton"]')?.setAttribute('hidden', '');
+    }}
 }})();
 </script>
 """, height=0)
@@ -1678,7 +1735,9 @@ def sidebar(license_info=None):
 
     for icon, label in menu_items:
         if label == "Calculadora libre":
-            sidebar_free_calculator(f"{icon}   {label}")
+            if license_info and license_info.get("allowed"):
+                with st.sidebar:
+                    sidebar_free_calculator(f"{icon}   {label}")
         elif st.sidebar.button(f"{icon}   {label}", key=f"nav_{label}", use_container_width=True):
             st.session_state.page = label
             st.rerun()
@@ -10878,11 +10937,21 @@ def placeholder(title):
 
 ensure_files()
 
+calculator_window = (
+    st.session_state.get("calculator_window_only", False)
+    or st.query_params.get(FREE_CALCULATOR_QUERY) == "1"
+)
+if calculator_window and "license_info" not in st.session_state:
+    redeem_calculator_ticket()
+
 if "license_info" not in st.session_state:
-    login_page()
+    if calculator_window:
+        st.title("Calculadora libre")
+        st.info("Vuelve a abrir la calculadora desde la barra lateral de tu ventana principal de SONARA.")
+    else:
+        login_page()
 else:
     lic = st.session_state.license_info
-    calculator_window = st.query_params.get(FREE_CALCULATOR_QUERY) == "1"
     page = "Calculadora libre" if calculator_window else sidebar(lic)
 
     # Alias para sesiones antiguas
