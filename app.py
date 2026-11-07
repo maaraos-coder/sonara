@@ -8742,47 +8742,45 @@ def app_lluvia():
     }, key_prefix="save_rain")
 
 
+FREE_CALCULATOR_MODULES = {
+    "Ruido aéreo": app_calculator,
+    "Ruido de impacto": app_impacto,
+    "Transmisión entre recintos (ISO 12354-1)": app_iso12354,
+    "Fachada (ISO 12354-3)": app_fachada_iso,
+    "Radiación al exterior (ISO 12354-4)": app_exterior_iso,
+    "Ruido de instalaciones (EN 12354-5)": app_instalaciones_iso,
+    "Reverberación (EN 12354-6)": app_reverberacion_iso,
+    "Ruido de lluvia": app_lluvia,
+}
+
+
+@st.dialog("Calculadora libre", width="large")
+def open_free_calculator(active_calculator):
+    st.caption("Consulta un cálculo auxiliar aquí. Al cerrar esta ventana, puedes seguir con las entradas de tu cálculo principal.")
+    options = [label for label, calculator in FREE_CALCULATOR_MODULES.items()
+               if calculator is not active_calculator]
+    label = st.selectbox("Tipo de cálculo auxiliar", options, key="floating_free_calculator_mode")
+    FREE_CALCULATOR_MODULES[label]()
+
+
+def free_calculator_launcher(active_calculator):
+    if st.button("Abrir Calculadora libre", key="open_floating_free_calculator"):
+        open_free_calculator(active_calculator)
+
+
 def app_calculadora_master():
     st.markdown(
         "<h1 style='color:#FFFFFF;margin-bottom:8px;'>Calculadora</h1>",
         unsafe_allow_html=True
     )
-
-    sub = st.radio(
-        "Tipo de cálculo",
-        [
-            "Ruido aéreo",
-            "Ruido de impacto",
-            "Transmisión entre recintos (ISO 12354-1)",
-            "Fachada (ISO 12354-3)",
-            "Radiación al exterior (ISO 12354-4)",
-            "Ruido de instalaciones (EN 12354-5)",
-            "Reverberación (EN 12354-6)",
-            "Ruido de lluvia",
-        ],
-        horizontal=True,
-        key="calc_master_submodule"
+    label = st.radio(
+        "Tipo de cálculo", list(FREE_CALCULATOR_MODULES), horizontal=True, key="calc_master_submodule",
     )
-
     st.markdown("<hr>", unsafe_allow_html=True)
-
-    if sub == "Ruido aéreo":
-        app_calculator()
-    elif sub == "Ruido de impacto":
-        app_impacto()
-    elif sub == "Transmisión entre recintos (ISO 12354-1)":
-        app_iso12354()
-    elif sub == "Fachada (ISO 12354-3)":
-        app_fachada_iso()
-    elif sub == "Radiación al exterior (ISO 12354-4)":
-        app_exterior_iso()
-    elif sub == "Ruido de instalaciones (EN 12354-5)":
-        app_instalaciones_iso()
-    elif sub == "Reverberación (EN 12354-6)":
-        app_reverberacion_iso()
-    elif sub == "Ruido de lluvia":
-        app_lluvia()
-
+    calculator = FREE_CALCULATOR_MODULES[label]
+    if calculator is not app_calculator:
+        free_calculator_launcher(calculator)
+    calculator()
 
 
 # =========================================================
@@ -10035,18 +10033,25 @@ def app_project_calculator_embedded(project, requirement):
     elif calc_mode == "Ruido aéreo":
         app_calculator(project, objetivo)
     elif calc_mode == "Ruido de impacto":
+        free_calculator_launcher(app_impacto)
         app_impacto()
     elif calc_mode == "ISO 12354-1":
+        free_calculator_launcher(app_iso12354)
         app_iso12354(project, objetivo)
     elif calc_mode == "Fachada ISO 12354-3":
+        free_calculator_launcher(app_fachada_iso)
         app_fachada_iso()
     elif calc_mode == "Exterior ISO 12354-4":
+        free_calculator_launcher(app_exterior_iso)
         app_exterior_iso()
     elif calc_mode == "Instalaciones EN 12354-5":
+        free_calculator_launcher(app_instalaciones_iso)
         app_instalaciones_iso()
     elif calc_mode == "Reverberación EN 12354-6":
+        free_calculator_launcher(app_reverberacion_iso)
         app_reverberacion_iso()
     else:
+        free_calculator_launcher(app_lluvia)
         app_lluvia()
 
 
