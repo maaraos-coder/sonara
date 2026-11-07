@@ -168,6 +168,17 @@ def browse_catalog(
 
 
 @lru_cache(maxsize=1)
+def supplemental_floor_covers() -> list[dict]:
+    """Traceable additions keep their report and original measured spectra."""
+    import json
+
+    path = ROOT / "data" / "supplemental_floor_covers.json"
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
 def floor_cover_catalog() -> pd.DataFrame:
     """Return the 674 floor coverings and their mechanical metadata."""
     if not catalog_available():
@@ -188,6 +199,9 @@ def floor_cover_catalog() -> pd.DataFrame:
             """,
             connection,
         )
+    additions = supplemental_floor_covers()
+    if additions:
+        frame = pd.concat([frame, pd.DataFrame(additions)], ignore_index=True)
     manufacturer = frame["manufacturer"].fillna("").astype(str).str.strip()
     manufacturer = manufacturer.mask(manufacturer.str.lower().isin(["", "empty", "generic"]), "")
     frame["display_name"] = frame["name"].fillna("Revestimiento sin nombre").astype(str)
@@ -199,6 +213,9 @@ def floor_cover_catalog() -> pd.DataFrame:
 
 @lru_cache(maxsize=2048)
 def _floor_cover_spectrum_rows(entity_id: int) -> tuple[tuple[float, float], ...]:
+    extra = next((item for item in supplemental_floor_covers() if item["entity_id"] == int(entity_id)), None)
+    if extra is not None:
+        return tuple(zip(extra["frequencies_hz"], extra["delta_db"]))
     database = catalog_database_path()
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         rows = connection.execute(
