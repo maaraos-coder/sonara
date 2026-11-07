@@ -1646,8 +1646,11 @@ def sidebar(license_info=None):
 
     for icon, label in menu_items:
         if st.sidebar.button(f"{icon}   {label}", key=f"nav_{label}", use_container_width=True):
-            st.session_state.page = label
-            st.rerun()
+            if label == "Calculadora libre":
+                st.session_state["open_free_calculator_requested"] = True
+            else:
+                st.session_state.page = label
+                st.rerun()
 
     if license_info:
         if st.sidebar.button("🚪   Cerrar sesión", key="nav_logout", use_container_width=True):
@@ -8754,17 +8757,64 @@ FREE_CALCULATOR_MODULES = {
 }
 
 
+def enable_free_calculator_drag():
+    components.html("""
+<script>
+(() => {
+    const frame = window.frameElement;
+    const dialog = frame?.closest('[role="dialog"]');
+    const handle = dialog?.querySelector('h1, h2, h3, [data-testid="stDialogHeader"]');
+    if (!handle || handle.dataset.sonaraDragBound) return;
+    handle.dataset.sonaraDragBound = '1';
+    handle.style.cursor = 'grab';
+    handle.style.touchAction = 'none';
+    handle.style.userSelect = 'none';
+
+    handle.addEventListener('pointerdown', (event) => {
+        if (!event.isPrimary || event.button !== 0 ||
+            event.target.closest('button, a')) return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        handle.style.cursor = 'grabbing';
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const previousX = Number(dialog.dataset.sonaraDragX || 0);
+        const previousY = Number(dialog.dataset.sonaraDragY || 0);
+        const bounds = dialog.getBoundingClientRect();
+        const title = handle.getBoundingClientRect();
+        const viewport = dialog.ownerDocument.documentElement;
+        const move = (pointer) => {
+            const dx = Math.max(80 - bounds.right,
+                Math.min(viewport.clientWidth - 80 - bounds.left, pointer.clientX - startX));
+            const dy = Math.max(8 - title.top,
+                Math.min(viewport.clientHeight - 40 - title.top, pointer.clientY - startY));
+            dialog.dataset.sonaraDragX = previousX + dx;
+            dialog.dataset.sonaraDragY = previousY + dy;
+            dialog.style.translate = (previousX + dx) + 'px ' + (previousY + dy) + 'px';
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('lostpointercapture', () => {
+            handle.removeEventListener('pointermove', move);
+            handle.style.cursor = 'grab';
+        }, {once: true});
+    });
+})();
+</script>
+""", height=0)
+
+
 @st.dialog("Calculadora libre", width="large")
-def open_free_calculator(active_calculator):
-    st.caption("Consulta un cálculo auxiliar aquí. Al cerrar esta ventana, puedes seguir con las entradas de tu cálculo principal.")
+def open_free_calculator(active_calculator=None):
+    enable_free_calculator_drag()
+    st.caption("Arrastra el encabezado para mover la ventana. Cierra con × para volver a tu cálculo principal.")
     options = [label for label, calculator in FREE_CALCULATOR_MODULES.items()
                if calculator is not active_calculator]
     label = st.selectbox("Tipo de cálculo auxiliar", options, key="floating_free_calculator_mode")
     FREE_CALCULATOR_MODULES[label]()
 
 
-def free_calculator_launcher(active_calculator):
-    if st.button("Abrir Calculadora libre", key="open_floating_free_calculator"):
+def maybe_open_free_calculator(active_calculator=None):
+    if st.session_state.pop("open_free_calculator_requested", False):
         open_free_calculator(active_calculator)
 
 
@@ -8778,8 +8828,7 @@ def app_calculadora_master():
     )
     st.markdown("<hr>", unsafe_allow_html=True)
     calculator = FREE_CALCULATOR_MODULES[label]
-    if calculator is not app_calculator:
-        free_calculator_launcher(calculator)
+    maybe_open_free_calculator(calculator)
     calculator()
 
 
@@ -10029,29 +10078,31 @@ def app_project_calculator_embedded(project, requirement):
     )
 
     if calc_mode == "Solución compuesta":
+        maybe_open_free_calculator()
         app_composite_solution(project, objetivo)
     elif calc_mode == "Ruido aéreo":
+        maybe_open_free_calculator(app_calculator)
         app_calculator(project, objetivo)
     elif calc_mode == "Ruido de impacto":
-        free_calculator_launcher(app_impacto)
+        maybe_open_free_calculator(app_impacto)
         app_impacto()
     elif calc_mode == "ISO 12354-1":
-        free_calculator_launcher(app_iso12354)
+        maybe_open_free_calculator(app_iso12354)
         app_iso12354(project, objetivo)
     elif calc_mode == "Fachada ISO 12354-3":
-        free_calculator_launcher(app_fachada_iso)
+        maybe_open_free_calculator(app_fachada_iso)
         app_fachada_iso()
     elif calc_mode == "Exterior ISO 12354-4":
-        free_calculator_launcher(app_exterior_iso)
+        maybe_open_free_calculator(app_exterior_iso)
         app_exterior_iso()
     elif calc_mode == "Instalaciones EN 12354-5":
-        free_calculator_launcher(app_instalaciones_iso)
+        maybe_open_free_calculator(app_instalaciones_iso)
         app_instalaciones_iso()
     elif calc_mode == "Reverberación EN 12354-6":
-        free_calculator_launcher(app_reverberacion_iso)
+        maybe_open_free_calculator(app_reverberacion_iso)
         app_reverberacion_iso()
     else:
-        free_calculator_launcher(app_lluvia)
+        maybe_open_free_calculator(app_lluvia)
         app_lluvia()
 
 
@@ -10900,3 +10951,6 @@ else:
         app_ayuda()
     else:
         placeholder(page)
+
+    if lic.get("allowed"):
+        maybe_open_free_calculator()
