@@ -10207,6 +10207,24 @@ def app_proyectos():
     df_targets = norm_targets_df()
     trial_usage_banner()
 
+    project_options = get_project_options()
+    if project_options:
+        current_project_id, _ = active_project()
+        project_ids = [project_id for project_id, _ in project_options]
+        project_names = dict(project_options)
+        chosen_project_id = st.selectbox(
+            "Abrir proyecto guardado",
+            project_ids,
+            index=project_ids.index(current_project_id) if current_project_id in project_ids else 0,
+            format_func=lambda project_id: project_names[project_id],
+        )
+        if chosen_project_id != current_project_id:
+            st.session_state["active_project_id"] = chosen_project_id
+            for state_key in ("active_requirement_id", "active_requirement", "design_req_select",
+                              "impact_reload", "impact_reload_target"):
+                st.session_state.pop(state_key, None)
+            st.rerun()
+
     tab_datos, tab_recintos, tab_matriz, tab_diseno, tab_sol, tab_opt, tab_costos, tab_informe = st.tabs([
         "📌 Proyecto",
         "🏢 Recintos",
