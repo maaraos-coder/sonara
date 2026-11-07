@@ -1162,6 +1162,7 @@ def ensure_sonara_logo():
     return logo_file
 
 
+@st.cache_resource
 def ensure_files():
     DATA_DIR.mkdir(exist_ok=True)
     ASSETS_DIR.mkdir(exist_ok=True)
@@ -2135,10 +2136,9 @@ def ensure_materials_file():
         df = default_materials_dataframe()
         df.to_csv(MATERIALS_CSV, index=False, encoding="utf-8")
 
-    required = default_materials_dataframe().columns.tolist()
-    changed = False
-
     defaults = default_materials_dataframe()
+    required = defaults.columns.tolist()
+    changed = False
     for col in required:
         if col not in df.columns:
             default_value = defaults[col].iloc[0] if col in defaults.columns else ""
@@ -2152,6 +2152,16 @@ def ensure_materials_file():
 
 
 def material_db():
+    try:
+        stat = MATERIALS_CSV.stat()
+    except FileNotFoundError:
+        ensure_materials_file()
+        stat = MATERIALS_CSV.stat()
+    return material_db_for_revision(stat.st_mtime_ns, stat.st_size)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def material_db_for_revision(modified_ns, size):
     """
     Une el catálogo acústico principal con la biblioteca editable de SONARA.
 
@@ -5616,7 +5626,7 @@ def selected_solution_label(sol, req=None):
     return sol.get("nombre", "Solución")
 
 
-def get_or_select_solution_for_cubicacion():
+def get_or_select_solution_for_cubicacion(project):
     """
     Devuelve solución y requerimiento para cubicación.
     Si no hay solución enviada desde Soluciones, permite elegir una desde el proyecto activo.
@@ -5626,12 +5636,11 @@ def get_or_select_solution_for_cubicacion():
     if sol:
         return sol, req
 
-    pid, p = active_project()
-    if not p:
+    if not project:
         return None, None
 
     options = []
-    for r in project_requirements(p):
+    for r in project_requirements(project):
         for s in r.get("soluciones", []):
             options.append((s, r, selected_solution_label(s, r)))
 
@@ -5768,14 +5777,14 @@ def sonara_clean_cubicacion_dataframe(df):
         return df
 
 
-def app_cubicacion():
+def app_cubicacion(project):
     st.markdown("<h2 style='color:#FFFFFF;margin-bottom:18px;'>Cubicación</h2>", unsafe_allow_html=True)
     st.markdown(
         "<div class='result-note'>Cubicación asociada a la solución diseñada o seleccionada del proyecto. No vuelve a diseñar el tabique: usa la composición guardada en la solución.</div>",
         unsafe_allow_html=True
     )
 
-    sol, req = get_or_select_solution_for_cubicacion()
+    sol, req = get_or_select_solution_for_cubicacion(project)
 
     if not sol:
         st.warning("No hay solución seleccionada para cubicación. Ve a Proyecto → Soluciones, elige una solución y presiona 'Cubicar'.")
@@ -7002,7 +7011,7 @@ def sonara_solution_cost_for_report(sol):
     except Exception:
         return 0.0
 
-def app_optimizador():
+def app_optimizador(pid, project):
     """
     Optimizador IA rápido y contextual.
     Trabaja sobre la solución/requerimiento seleccionado, no sobre un diseño nuevo desde cero.
@@ -7019,7 +7028,6 @@ def app_optimizador():
     )
 
     # Contexto desde proyecto
-    pid, project = active_project()
     if project is None:
         project = st.session_state.get("active_project", {})
 
@@ -8847,6 +8855,7 @@ FREE_CALCULATOR_MODULES = {
 }
 
 
+@st.fragment
 def app_calculadora_master():
     st.title("Calculadora libre")
     label = st.radio(
@@ -9483,6 +9492,7 @@ def validate_custom_requirement(req):
     return req
 
 
+@st.cache_data(show_spinner=False)
 def norm_targets_df():
     return pd.DataFrame(norm_target_rows())
 
@@ -10122,6 +10132,11 @@ def app_project_calculator_embedded(project, requirement):
         app_lluvia()
 
 
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_solution_pdf(solution, requirement, status, tables, columns):
+    return solution_pdf(solution, requirement, status, tables, columns)
+
+
 def render_solution_detail(solution, requirement, *, chart_key):
     """Show recorded values, including legacy solutions with partial inputs."""
     with st.expander("Ficha técnica de la solución", expanded=True):
@@ -10199,7 +10214,7 @@ def render_solution_detail(solution, requirement, *, chart_key):
             st.dataframe(pd.DataFrame(rows, columns=headers), hide_index=True)
         status, _ = solution_status(solution, requirement)
         st.download_button(
-            "Descargar ficha en PDF", solution_pdf(solution, requirement, status, tables, columns),
+            "Descargar ficha en PDF", cached_solution_pdf(solution, requirement, status, tables, columns),
             file_name="sonara-ficha-tecnica.pdf", mime="application/pdf", key=f"{chart_key}_pdf",
         )
 
@@ -10372,6 +10387,8 @@ def app_proyectos():
         "📄 Informe"
     ])
 
+    p = current
+
     # 1. Proyecto
     with tab_datos:
         col1, col2 = st.columns([0.9, 1.3], gap="large")
@@ -10387,11 +10404,9 @@ def app_proyectos():
                     st.rerun()
 
         with col2:
-            pid, p = active_project()
             if p:
                 reqs = project_requirements(p)
                 rooms = project_rooms(p)
-                df_matrix = requirement_matrix_dataframe(p)
                 total_req = len(reqs)
                 total_sol = sum(len(r.get("soluciones", [])) for r in reqs)
                 cumple = 0
@@ -10425,7 +10440,6 @@ def app_proyectos():
 
     # 2. Recintos
     with tab_recintos:
-        pid, p = active_project()
         if not p:
             st.warning("Primero crea un proyecto.")
         else:
@@ -10440,11 +10454,12 @@ def app_proyectos():
                 if st.button("➕ Agregar / actualizar recinto", use_container_width=True, key="room_add"):
                     ok = upsert_room(pid, {"nombre": nombre_rec, "uso": uso_rec, "nivel": piso_rec, "area": area_rec, "volumen": volumen_rec})
                     if ok:
+                        pid, p = active_project()
                         st.success("Recinto guardado.")
                     else:
                         st.error("No se pudo guardar el recinto.")
             with col2:
-                rooms = project_rooms(active_project()[1])
+                rooms = project_rooms(p)
                 if not rooms:
                     st.info("Aún no hay recintos.")
                 else:
@@ -10468,11 +10483,11 @@ def app_proyectos():
                         rid = next((r.get("id") for r in rooms if r.get("nombre") == del_room), None)
                         if rid:
                             delete_room(pid, rid)
+                            pid, p = active_project()
                             st.success("Recinto eliminado.")
 
     # 3. Matriz / Elementos a diseñar
     with tab_matriz:
-        pid, p = active_project()
         if not p:
             st.warning("Primero crea un proyecto.")
         else:
@@ -10541,20 +10556,22 @@ def app_proyectos():
                 with c1:
                     if st.button("➕ Agregar elemento a la matriz", use_container_width=True, key="matrix_add", disabled=requerimiento is None):
                         req_id = upsert_requirement(pid, requerimiento)
+                        pid, p = active_project()
                         st.success("Elemento agregado a la matriz y dejado como activo.")
                 with c2:
                     if st.button("📐 Diseñar este elemento", use_container_width=True, key="matrix_design", disabled=requerimiento is None):
                         req_id = upsert_requirement(pid, requerimiento)
+                        pid, p = active_project()
                         st.success("Elemento activo. Ve a la pestaña Diseñar.")
 
                 st.markdown("<hr>", unsafe_allow_html=True)
-                df_matrix = requirement_matrix_dataframe(active_project()[1])
+                df_matrix = requirement_matrix_dataframe(p)
                 if df_matrix.empty:
                     st.info("Aún no hay elementos en la matriz.")
                 else:
                     st.dataframe(df_matrix, use_container_width=True, hide_index=True, height=380)
 
-                    reqs_delete = project_requirements(active_project()[1])
+                    reqs_delete = project_requirements(p)
                     labels_delete = [
                         f"{r.get('recinto_emisor','')} → {r.get('recinto_receptor','')} · {r.get('tipo_elemento','')} · {r.get('indicador','')} {r.get('sentido','')} {r.get('valor','')} {r.get('unidad','')}"
                         for r in reqs_delete
@@ -10572,7 +10589,6 @@ def app_proyectos():
 
     # 4. Diseñar
     with tab_diseno:
-        pid, p = active_project()
         if not p:
             st.warning("Primero crea un proyecto.")
         else:
@@ -10597,7 +10613,6 @@ def app_proyectos():
 
     # 5. Soluciones
     with tab_sol:
-        pid, p = active_project()
         if not p:
             st.warning("Crea un proyecto.")
         else:
@@ -10653,6 +10668,7 @@ def app_proyectos():
                                     r["soluciones"] = [s for s in r.get("soluciones", []) if s.get("id") != sol.get("id")]
                             projects[pid]["requerimientos"] = reqs2
                             save_projects(projects)
+                            p = projects[pid]
                             st.success("Eliminada.")
 
     # 6. Optimización
@@ -10663,7 +10679,7 @@ def app_proyectos():
             st.markdown(f"<div class='result-note'>Optimizando: <b>{sol.get('nombre')}</b> para <b>{req.get('recinto_emisor')} → {req.get('recinto_receptor')}</b>.</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div class='result-note'>Selecciona una solución guardada para optimizarla o usa el optimizador general.</div>", unsafe_allow_html=True)
-        app_optimizador()
+        app_optimizador(pid, p)
 
     # 7. Costos
     with tab_costos:
@@ -10679,11 +10695,10 @@ def app_proyectos():
             )
         else:
             st.markdown("<div class='result-note'>Selecciona una solución guardada en Proyecto → Soluciones y presiona Cubicar.</div>", unsafe_allow_html=True)
-        app_cubicacion()
+        app_cubicacion(p)
 
     # 8. Informe
     with tab_informe:
-        pid, p = active_project()
         if not p:
             st.warning("Crea un proyecto.")
         else:
