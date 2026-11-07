@@ -3533,7 +3533,9 @@ def app_iso12354(project=None, requirement=None):
         cards = []
         for path in paths:
             name = path["name"]
-            code = name.split(" · ", 1)[0]
+            code, _, flank = name.partition(" · ")
+            if code == "Dd":
+                continue
             origin, destination = routes[code]
             style = path_styles[name]
             border = {"solid": "solid", "dash": "dashed", "dot": "dotted"}[style["dash"]]
@@ -3541,7 +3543,8 @@ def app_iso12354(project=None, requirement=None):
                 f'<div style="background:#0B1624;border-radius:8px;padding:10px 12px;">'
                 f'<strong style="color:{style["color"]};border-bottom:2px {border} {style["color"]};">'
                 f'{html.escape(name)}</strong>'
-                f'<div style="margin-top:6px;">{origin} → {destination}</div></div>'
+                f'<div style="margin-top:6px;">{origin} → {destination}</div>'
+                + airborne_route_svg(code, flank, style) + '</div>'
             )
         diagram = (
             '<svg viewBox="0 0 480 210" role="img" aria-label="Corte de dos recintos contiguos con muro separador" '
@@ -3555,15 +3558,16 @@ def app_iso12354(project=None, requirement=None):
             '<path d="M144 123H330" fill="none" stroke="#4F7CFF" stroke-width="4"/>'
             '<path d="M330 117L341 123L330 129Z" fill="#4F7CFF"/>'
             '<text x="295" y="115" fill="#AFC5FF" font-size="13">Dd</text>'
-            + airborne_flank_paths_svg(path_styles) + '</svg>'
+            '</svg>'
         )
         return (
             '<div class="sonara-card"><div class="sonara-card-title">Isométrica esquemática · caminos de transmisión</div>'
-            + iso_room_diagram(impact=False, flank_styles={}, path_styles=path_styles)
+            + iso_room_diagram(impact=False, flank_styles={})
             + '<details><summary>Corte del muro separador</summary>' + diagram + '</details>'
-            '<p>La flecha azul muestra el camino directo Dd. Los demás trazos representan los caminos laterales '
-            'activos. Su posición es esquemática y sus colores y trazos coinciden con las curvas por bandas.</p>'
-            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));'
+            '<p>La flecha azul muestra el camino directo Dd. Cada tarjeta dibuja un camino lateral activo: '
+            'el punto marca la superficie excitada en el emisor y la punta, la superficie que radia en el receptor. '
+            'El plano coloreado identifica el flanco y coincide con el color de la curva.</p>'
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,225px),1fr));'
             'gap:8px;color:#EAF4FF;">' + "".join(cards) + '</div></div>'
         )
 
@@ -4289,38 +4293,64 @@ def energetic_sum_levels(levels):
     return 10.0 * np.log10(np.sum(10 ** (arr / 10.0), axis=0))
 
 
-def airborne_flank_paths_svg(path_styles, *, isometric=False):
-    """Draw each calculated lateral path across the room pair."""
-    flanks = {}
-    parts = []
-    middle = 280 if isometric else 240
-    upper, lower = (128, 272) if isometric else (54, 177)
-    for name, style in path_styles.items():
-        code, separator, flank = name.partition(" · ")
-        if not separator or code not in ("Df", "Fd", "Ff"):
-            continue
-        index = flanks.setdefault(flank, len(flanks))
-        edge = upper + 8 * (index // 2) if index % 2 == 0 else lower - 8 * (index // 2)
-        spread = {"Df": -4, "Fd": 0, "Ff": 4}[code]
-        edge += spread
-        side = -1 if index % 2 == 0 else 1
-        inlet, outlet = middle - 94 - spread * 2, middle + 94 + spread * 2
-        separator_y = edge - side * (26 + 5 * (index // 2))
-        flank_y = edge - side * 12
-        source_y = separator_y if code[0] == "D" else flank_y
-        receiver_y = separator_y if code[1] == "d" else flank_y
-        left_joint, right_joint = middle - 11, middle + 11
-        color = style["color"]
-        dash = {"solid": "", "dash": ' stroke-dasharray="6 4"', "dot": ' stroke-dasharray="2 4"'}[style["dash"]]
-        parts.append(
-            f'<path d="M{inlet} {source_y}H{left_joint}L{middle} {edge}L{right_joint} {receiver_y}H{outlet}" '
-            f'fill="none" stroke="{color}" stroke-width="2"{dash}><title>{html.escape(name)}</title></path>'
-            f'<path d="M{outlet - 7} {receiver_y - 4}L{outlet} {receiver_y}L{outlet - 7} {receiver_y + 4}Z" fill="{color}"/>'
-        )
-    return "".join(parts)
+def airborne_route_svg(code, flank, style):
+    """Show one path with endpoints on the surfaces that exchange vibration."""
+    planes = {
+        "Muro lateral 1": (1, 1),
+        "Muro lateral 2": (1, -1),
+        "Fachada / elemento lateral": (1, -1),
+        "Losa de piso": (2, -1),
+        "Losa de cielo": (2, 1),
+    }
+    axis, edge = planes.get(flank, (1, 1))
+    other = 3 - axis
+
+    def project(point):
+        x, y, z = point
+        return 160 + 89 * x + 31 * y, 85 - 26 * y - 36 * z
+
+    def on_flank(x, offset=0):
+        point = [x, 0, 0]
+        point[axis] = edge
+        point[other] = offset
+        return point
+
+    def coords(points):
+        return " ".join(f"{x:g},{y:g}" for x, y in map(project, points))
+
+    def plane(points, fill, stroke):
+        return f'<polygon points="{coords(points)}" fill="{fill}" fill-opacity=".26" stroke="{stroke}"/>'
+
+    junction = on_flank(0)
+    source = (-.035, 0, 0) if code[0] == "D" else on_flank(-.74)
+    receiver = (.035, 0, 0) if code[1] == "d" else on_flank(.74)
+    color = style["color"]
+    dash = {"solid": "", "dash": ' stroke-dasharray="7 4"', "dot": ' stroke-dasharray="2 4"'}[style["dash"]]
+    sx, sy = project(source)
+    ex, ey = project(receiver)
+    jx, jy = project(junction)
+    length = math.hypot(ex - jx, ey - jy)
+    ux, uy = (ex - jx) / length, (ey - jy) / length
+    head = [(ex, ey), (ex-8*ux-4*uy, ey-8*uy+4*ux), (ex-8*ux+4*uy, ey-8*uy-4*ux)]
+    head_points = " ".join(f"{x:g},{y:g}" for x, y in head)
+    flank_label = "Fachada exterior" if flank.startswith("Fachada") else flank
+    return (
+        f'<svg viewBox="0 0 320 184" role="img" aria-label="{html.escape(code + " · " + flank_label, quote=True)}" '
+        'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
+        + plane([(-1,-1,-1), (1,-1,-1), (1,1,-1), (-1,1,-1)], "#38566F", "#647E95")
+        + plane([(0,-1,-1), (0,1,-1), (0,1,1), (0,-1,1)], "#82A9C6", "#A4BBD0")
+        + plane([on_flank(-1,-1), on_flank(1,-1), on_flank(1,1), on_flank(-1,1)], color, color)
+        + f'<polyline points="{coords([source,junction,receiver])}" fill="none" stroke="{color}" stroke-width="3"{dash}/>'
+        f'<circle cx="{sx:g}" cy="{sy:g}" r="4" fill="{color}"/>'
+        f'<polygon points="{head_points}" fill="{color}"/>'
+        '<g fill="#EAF4FF" font-size="12" text-anchor="middle">'
+        '<text x="73" y="15">Emisor</text><text x="247" y="15">Receptor</text>'
+        '<text x="160" y="160">Gris: muro separador</text>'
+        f'<text x="160" y="177" fill="{color}">{html.escape(flank_label)}</text></g></svg>'
+    )
 
 
-def iso_room_diagram(*, impact, flank_styles, path_styles=None):
+def iso_room_diagram(*, impact, flank_styles):
     """Axonometric schematic. Screen coordinates describe a symbolic room pair."""
     if impact:
         structure = (
@@ -4372,7 +4402,6 @@ def iso_room_diagram(*, impact, flank_styles, path_styles=None):
         '<g fill="#EAF4FF" font-size="15" font-weight="650">' + structure + '</g>'
         f'<g fill="none"><path d="{direct}" stroke="{color}" stroke-width="4"/>'
         + "".join(strokes) + '</g>'
-        + (airborne_flank_paths_svg(path_styles or {}, isometric=True) if not impact else "")
         + f'<path d="{arrow}" fill="{color}"/></svg>'
     )
 
