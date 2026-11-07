@@ -9882,7 +9882,7 @@ def render_recipe_design(solution, project_id, requirement):
     if st.button("Cerrar copia y volver al formulario de diseño", key=f"{prefix}_close"):
         st.session_state.pop("impact_reload", None)
         st.rerun()
-    render_solution_detail(solution)
+    render_solution_detail(solution, chart_key=f"{prefix}_spectrum")
     labels = {"area": "Área separadora [m²]", "volume": "Volumen receptor [m³]",
               "tr": "TR receptor [s]", "t0": "TR de referencia [s]",
               "shape": "Corrección de forma ΔLfs [dB]", "lden": "Lden [dB]",
@@ -9981,7 +9981,7 @@ def render_recipe_design(solution, project_id, requirement):
                          target_requirement_label=requirement.get("elemento"))
 
 
-def render_solution_detail(solution):
+def render_solution_detail(solution, *, chart_key):
     """Show recorded values, including legacy solutions with partial inputs."""
     with st.expander("Ficha técnica de la solución", expanded=True):
         for assembly in solution.get("construccion_guardada") or []:
@@ -10072,17 +10072,13 @@ def render_solution_detail(solution):
                 if label != "Hz":
                     figure.add_scatter(x=frequencies, y=curve, mode="lines+markers", name=label)
             style_acoustic_spectrum(figure, frequencies, height=380)
-            st.plotly_chart(figure, use_container_width=True)
+            st.plotly_chart(figure, use_container_width=True, key=chart_key)
             st.dataframe(pd.DataFrame(columns), hide_index=True)
         for spectrum in solution.get("espectros_componentes") or []:
             if "curva" in spectrum and "frecuencias" in spectrum:
                 with st.expander(f"Espectro del componente · {spectrum.get('nombre', '')}"):
                     st.dataframe(pd.DataFrame({"Hz": spectrum["frecuencias"], "R [dB]": spectrum["curva"]}),
                                  hide_index=True)
-
-        with st.expander("Registro guardado · materiales, flancos y otros datos"):
-            st.json(solution, expanded=1)
-
 
 def impact_reload_missing(solution):
     """An exact reload needs the saved geometry and both treatment spectra."""
@@ -10557,7 +10553,7 @@ def app_proyectos():
                         key=f"solution_pick_{pid}_{selected_req['id']}",
                     )
                     sol = sols[selected_index]
-                    render_solution_detail(sol)
+                    render_solution_detail(sol, chart_key=f"saved_solution_spectrum_{pid}_{selected_req['id']}")
                     missing = impact_reload_missing(sol) if sol.get("modo") == "ISO 12354-2" else []
                     if missing:
                         st.caption("Faltan datos para reconstruir esta corrida: " + ", ".join(missing) + ".")
