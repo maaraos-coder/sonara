@@ -13,6 +13,8 @@ import secrets
 import math
 import os
 
+from solution_sheet import calculation_tables, solution_pdf
+
 from descriptor_optimizer import (
     canonical_descriptor as canonical_design_descriptor,
     default_direction as descriptor_default_direction,
@@ -4058,7 +4060,8 @@ def app_iso12354(project=None, requirement=None):
                 "reverberacion_receptor_s": t_receptor,
                 "reverberacion_referencia_s": 0.5,
             },
-            "separador": {"rw_db": rw_direct, "origen": "Curva de referencia a partir del Rw"},
+            "separador": {"rw_db": rw_direct, "origen": "Curva de referencia a partir del Rw",
+                          "curva": r_direct.tolist()},
             "flancos": [
                 {key: value.tolist() if isinstance(value, np.ndarray) else value
                  for key, value in flank.items()}
@@ -4881,6 +4884,15 @@ def app_impacto():
             "valor": float(lntw),
             "masa": None if masa_losa is None else round(float(masa_losa), 1),
             "espesor": esp_losa,
+            "densidad_losa": dens_losa if esp_losa is not None else None,
+            "masa_sobrelosa": masa_sobrelosa if f0_piso is not None else None,
+            "rigidez_dinamica": rigidez_dinamica if f0_piso is not None else None,
+            "frecuencia_propia": f0_piso,
+            "base_spectrum": ln0_curve.tolist(),
+            "entradas_calculo": {"incluir_flancos": incluir_flancos, **(
+                {"nivel_flancos_equivalentes_db": flanco_nivel, "numero_flancos_equivalentes": n_flancos}
+                if modo_impacto == "Simplificado" and incluir_flancos else {}
+            )},
             "frecuencias": freqs.tolist(),
             "curva": lnT.tolist(),
             "delta_piso_por_banda": delta_piso.tolist(),
@@ -8150,6 +8162,13 @@ def app_fachada_iso():
         "frecuencias": list(map(float, result["freqs"])),
         "curva": list(map(float, result["curve"])),
         "componentes": component_rows,
+        "entradas_calculo": {
+            "volume": volume, "area": facade_area, "shape": shape, "lden": lden,
+            "elementos_pequenos": [{k: np.asarray(v).tolist() if k in ("dne_curve", "frequencies") else v
+                                     for k, v in item.items()} for item in small_elements],
+            "juntas": [{k: np.asarray(v).tolist() if k in ("rs_curve", "frequencies") else v
+                        for k, v in item.items()} for item in joints],
+        },
         "espectros_componentes": [
             {"nombre": item["name"], "frecuencias": item["freqs"].tolist(), "curva": item["curve"].tolist()}
             for item in components
@@ -8322,6 +8341,11 @@ def app_instalaciones_iso():
         "lafmax_nt": float(result["la_normalized"]) if event_type.startswith("Intermitente") else None,
         "frecuencias": list(map(float, OCTAVE_EQUIPMENT)),
         "curva": list(map(float, result["lp_normalized"])),
+        "entradas_calculo": {"evento": event_type, "receiver_absorption": receiver_abs, "tr": receiver_t, "t0": 0.5},
+        "vias_instalaciones": [
+            {key: np.asarray(value).tolist() if key == "frequencies" else value
+             for key, value in path.items()} for path in service_paths
+        ],
         "descripcion": "Predicción por bandas; clasificación ISO/TS 19488 a cargo del usuario.",
     }, key_prefix="save_services")
 
@@ -9874,114 +9898,7 @@ def app_project_calculator_embedded(project, requirement):
         app_lluvia()
 
 
-def render_recipe_design(solution, project_id, requirement):
-    recipe = solution["receta_diseno"]
-    method = recipe["metodo"]
-    prefix = f"recipe_{project_id}_{requirement['id']}_{solution['id']}"
-    st.subheader("Copia de diseño · " + solution["nombre"])
-    if st.button("Cerrar copia y volver al formulario de diseño", key=f"{prefix}_close"):
-        st.session_state.pop("impact_reload", None)
-        st.rerun()
-    render_solution_detail(solution, chart_key=f"{prefix}_spectrum")
-    labels = {"area": "Área separadora [m²]", "volume": "Volumen receptor [m³]",
-              "tr": "TR receptor [s]", "t0": "TR de referencia [s]",
-              "shape": "Corrección de forma ΔLfs [dB]", "lden": "Lden [dB]",
-              "source_absorption": "Absorción emisora [m²]",
-              "receiver_absorption": "Absorción receptora [m²]"}
-    inputs = dict(recipe)
-    for key, label in labels.items():
-        if key in recipe:
-            inputs[key] = st.number_input(label, value=float(recipe[key]),
-                                          min_value=None if key in ("shape", "lden") else 0.01,
-                                          key=f"{prefix}_{key}")
-
-    def edit_spectrum(freq, values, label, key):
-        edited = st.data_editor(pd.DataFrame({"Hz": freq, label: np.asarray(values, dtype=float)}),
-                                disabled=["Hz"], hide_index=True, key=f"{prefix}_{key}")
-        return edited[label].to_numpy(dtype=float)
-
-    draft = dict(solution)
-    if method == "AI":
-        freq = solution["frecuencias_hz"]
-        direct = edit_spectrum(freq, solution["separador"]["curva"], "R separador [dB]", "direct")
-        if not np.isfinite(direct).all():
-            st.warning("Completa todas las bandas del separador.")
-            return
-        result = airborne_detailed(direct, freq, inputs["area"], inputs["volume"],
-                                   solution["flancos"], inputs["t0"])
-        curve = result["dnt_curve"]
-        rating = airborne_single_numbers(freq, curve)
-        w = rating["weighted"]
-        low = w + rating["c50_3150"]
-        draft.update(dntw=w, dnt50=low, valor=low, dnt_a=w + rating["c"], dnt_atr=w + rating["ctr"],
-                     dnt_por_banda_db=curve.tolist(),
-                     separador={**solution["separador"], "curva": direct.tolist(),
-                                "rw_db": airborne_single_numbers(freq, direct)["weighted"]},
-                     geometria={"superficie_separador_m2": inputs["area"],
-                                "volumen_receptor_m3": inputs["volume"],
-                                "reverberacion_receptor_s": inputs["tr"],
-                                "reverberacion_referencia_s": inputs["t0"]},
-                     resultado_label=f"DₙT,w {w} dB · DₙT,50 {low} dB")
-    elif method == "FA":
-        elements = []
-        spectra = []
-        components = []
-        for index, (component, spectrum) in enumerate(zip(solution["componentes"], solution["espectros_componentes"])):
-            name = spectrum["nombre"]
-            f = spectrum["frecuencias"]
-            with st.expander(name, expanded=True):
-                area = st.number_input("Área [m²]", min_value=0.01, value=float(component["Área [m²]"]),
-                                       key=f"{prefix}_area_{index}")
-                reduction = edit_spectrum(f, spectrum["curva"], "R [dB]", f"fa_{index}")
-            if not np.isfinite(reduction).all():
-                st.warning("Completa todas las bandas del componente.")
-                return
-            elements.append({"name": name, "area": area, "frequencies": f, "curve": reduction})
-            spectra.append({**spectrum, "curva": reduction.tolist()})
-            numbers = airborne_single_numbers(f, reduction)
-            components.append({**component, "Área [m²]": area, "Rw [dB]": numbers["weighted"],
-                               "C [dB]": numbers["c"], "Ctr [dB]": numbers["ctr"]})
-        result = facade_detailed(elements, inputs["volume"], sum(e["area"] for e in elements),
-                                 inputs["shape"])
-        freq = result["frequencies"]
-        curve = result["d2mnt_curve"]
-        rating = airborne_single_numbers(freq, curve)
-        w = rating["weighted"]
-        atr = w + rating["ctr"]
-        draft.update(curva=curve.tolist(), d2mntw=w, d2mnt_atr=atr, valor=atr,
-                     lden=inputs["lden"], componentes=components, espectros_componentes=spectra,
-                     resultado_label=f"D₂m,nT,w {w} dB · D₂m,nT,Atr {atr} dB")
-    else:
-        freq = solution["frecuencias"]
-        source = edit_spectrum(freq, inputs["source_curve"], "Lw de la fuente [dB]", "source")
-        reduction = edit_spectrum(freq, inputs["reduction_curve"], "R del cierre [dB]", "shaft")
-        if not np.isfinite(source).all() or not np.isfinite(reduction).all():
-            st.warning("Completa las bandas de la fuente y del cierre.")
-            return
-        paths = [{"kind": "airborne_adjacent", "frequencies": freq, "source_curve": source,
-                  "reduction_curve": reduction, "source_absorption": inputs["source_absorption"],
-                  "separating_area": inputs["area"]}]
-        result = service_equipment_detailed(paths, inputs["receiver_absorption"], inputs["tr"], inputs["t0"])
-        curve = result["normalized_curve"]
-        level = result["la_normalized"]
-        inputs.update(source_curve=source.tolist(), reduction_curve=reduction.tolist())
-        draft.update(curva=curve.tolist(), r_separador_octavas=reduction.tolist(),
-                     lafmax_nt=level, la_normalized=level, valor=level,
-                     estado_docente="Predicción por vía aérea; máximo total pendiente.",
-                     resultado_label=f"LAFmax,nT aéreo proyectado {level:.1f} dB(A)")
-    if not np.isfinite(curve).all():
-        st.warning("Completa los valores de todas las bandas para recalcular.")
-        return
-    st.markdown("#### Resultado recalculado")
-    st.write(draft["resultado_label"])
-    st.dataframe(pd.DataFrame({"Hz": freq, "Resultado [dB]": curve}), hide_index=True)
-    draft.update(nombre=f"{solution['nombre']} · copia", receta_diseno=inputs)
-    solution_save_widget(draft, key_prefix=prefix, target_project_id=project_id,
-                         target_requirement_id=requirement["id"],
-                         target_requirement_label=requirement.get("elemento"))
-
-
-def render_solution_detail(solution, *, chart_key):
+def render_solution_detail(solution, requirement, *, chart_key):
     """Show recorded values, including legacy solutions with partial inputs."""
     with st.expander("Ficha técnica de la solución", expanded=True):
         for assembly in solution.get("construccion_guardada") or []:
@@ -10011,41 +9928,16 @@ def render_solution_detail(solution, *, chart_key):
                 solution.get("espesor"), solution.get("tipo_piso", "Sin revestimiento"),
                 solution.get("tipo_cielo", "Sin cielo")), height=410, scrolling=True)
         recipe = solution.get("receta_diseno")
-        if recipe:
-            st.markdown("#### Entradas de cálculo")
-            labels = {"area": "Área separadora [m²]", "volume": "Volumen [m³]", "tr": "TR [s]",
-                      "t0": "TR de referencia [s]", "shape": "ΔLfs [dB]", "lden": "Lden [dB]",
-                      "source_absorption": "Absorción emisora [m²]", "receiver_absorption": "Absorción receptora [m²]"}
-            st.dataframe(pd.DataFrame([(label, recipe[key]) for key, label in labels.items() if key in recipe],
-                                      columns=["Parámetro", "Valor"]), hide_index=True)
-        if solution.get("componentes"):
-            st.dataframe(pd.DataFrame(solution["componentes"]), hide_index=True)
         description = solution.get("descripcion")
         if description:
             st.write(description)
         if solution.get("estado_docente"):
             st.info(solution["estado_docente"])
 
-        labels = {
-            "modo": "Método", "masa": "Masa superficial [kg/m²]",
-            "espesor": "Espesor [mm]", "tipo_piso": "Piso",
-            "tipo_cielo": "Cielo", "ln0w": "Ln,0,w de la losa [dB]",
-            "lntw": "L′ₙT,w [dB]", "lnt50": "L′ₙT,50 [dB]",
-            "dntw": "DₙT,w [dB]", "dnt50": "DₙT,50 [dB]",
-            "superficie_separador_m2": "Área separadora [m²]",
-            "volumen_receptor_m3": "Volumen receptor [m³]",
-            "reverberacion_receptor_s": "TR receptor [s]",
-            "reverberacion_referencia_s": "TR de referencia [s]",
-        }
-        fields = {**solution, **(solution.get("geometria") or {})}
-        rows = [(label, str(fields[key])) for key, label in labels.items()
-                if fields.get(key) is not None]
-        if rows:
-            st.dataframe(pd.DataFrame(rows, columns=["Parámetro", "Valor"]), hide_index=True)
-
         frequencies = solution.get("frecuencias") or solution.get("frecuencias_hz") or []
         spectra = {
-            "curva": "Curva final [dB]",
+            "curva": "Curva guardada [dB]",
+            "curva_d2mnt": "D2m,nT [dB]",
             "dnt_por_banda_db": "DₙT [dB]",
             "delta_piso_por_banda": "ΔL piso [dB]",
             "delta_cielo_por_banda": "ΔL cielo [dB]",
@@ -10057,8 +9949,9 @@ def render_solution_detail(solution, *, chart_key):
             if frequencies and isinstance(curve, list) and len(curve) == len(frequencies):
                 columns[label] = curve
         if recipe and recipe.get("metodo") == "IN":
-            columns["Lw fuente [dB]"] = recipe["source_curve"]
-            columns["R cierre [dB]"] = recipe["reduction_curve"]
+            for key, label in (("source_curve", "Lw fuente [dB]"), ("reduction_curve", "R cierre [dB]")):
+                if isinstance(recipe.get(key), list) and len(recipe[key]) == len(frequencies):
+                    columns[label] = recipe[key]
         base_curve = solution.get("base_spectrum")
         if base_curve and len(base_curve) == len(frequencies):
             columns["Losa desnuda Ln,0 [dB]"] = base_curve
@@ -10074,132 +9967,17 @@ def render_solution_detail(solution, *, chart_key):
             style_acoustic_spectrum(figure, frequencies, height=380)
             st.plotly_chart(figure, use_container_width=True, key=chart_key)
             st.dataframe(pd.DataFrame(columns), hide_index=True)
-        for spectrum in solution.get("espectros_componentes") or []:
-            if "curva" in spectrum and "frecuencias" in spectrum:
-                with st.expander(f"Espectro del componente · {spectrum.get('nombre', '')}"):
-                    st.dataframe(pd.DataFrame({"Hz": spectrum["frecuencias"], "R [dB]": spectrum["curva"]}),
-                                 hide_index=True)
-
-def impact_reload_missing(solution):
-    """An exact reload needs the saved geometry and both treatment spectra."""
-    geometry = solution.get("geometria") or {}
-    missing = [label for key, label in (
-        ("superficie_separador_m2", "área separadora"),
-        ("volumen_receptor_m3", "volumen receptor"),
-        ("reverberacion_receptor_s", "TR receptor"),
-        ("reverberacion_referencia_s", "TR de referencia"),
-    ) if not isinstance(geometry.get(key), (int, float))
-        or not math.isfinite(geometry[key]) or geometry[key] <= 0]
-    if not isinstance(solution.get("ln0w"), (int, float)) or not math.isfinite(solution["ln0w"]):
-        missing.append("nivel de impacto de la losa")
-    if solution.get("frecuencias") != impact_freqs().tolist():
-        missing.append("grilla de 19 bandas")
-    for key, label in (
-        ("delta_piso_por_banda", "curva ΔL del piso"),
-        ("delta_cielo_por_banda", "curva ΔL del cielo"),
-    ):
-        curve = solution.get(key)
-        if not isinstance(curve, list) or len(curve) != len(impact_freqs()) or not all(
-            isinstance(value, (int, float)) and math.isfinite(value) for value in curve
-        ):
-            missing.append(label)
-    flanks = solution.get("flancos")
-    if not isinstance(flanks, list) or any(
-        not isinstance(flank, dict)
-        or not {"source_curve", "receiver_curve", "length", "kij"} <= flank.keys()
-        for flank in flanks
-    ):
-        missing.append("configuración de flancos")
-    return missing
-
-
-def render_reloaded_impact(solution, project_id, requirement):
-    """Edit a draft using the original spectral model and save it as a new solution."""
-    st.subheader("Copia de diseño · Impacto ISO 12354-2")
-    st.write(solution.get("nombre", "Solución guardada"))
-    if st.button("Cerrar copia y volver al formulario de diseño", key="impact_reload_close"):
-        st.session_state.pop("impact_reload", None)
-        st.rerun()
-    if solution.get("estado_docente"):
-        st.info(solution["estado_docente"])
-    prefix = f"impact_reload_{project_id}_{requirement['id']}_{solution.get('id', '')}"
-    geometry = solution["geometria"]
-    area_col, vol_col, tr_col = st.columns(3)
-    area = area_col.number_input("Área separadora [m²]", min_value=0.01,
-                                value=float(geometry["superficie_separador_m2"]), key=f"{prefix}_area")
-    volume = vol_col.number_input("Volumen receptor [m³]", min_value=0.01,
-                                 value=float(geometry["volumen_receptor_m3"]), key=f"{prefix}_volume")
-    receiver_t = tr_col.number_input("TR receptor [s]", min_value=0.05, step=0.01,
-                                    value=float(geometry["reverberacion_receptor_s"]), key=f"{prefix}_tr")
-    t0 = float(geometry["reverberacion_referencia_s"])
-    ln0w = st.number_input("Ln,0,w de la losa [dB]", value=float(solution["ln0w"]), key=f"{prefix}_ln0",
-                            disabled=solution.get("normalization") == "Ln_to_LnT")
-    st.caption(f"TR de referencia: {t0:g} s. Se usan las curvas guardadas para los flancos.")
-    frequencies, base = impact_reference_curve_from_lnw(ln0w)
-    uses_normalized_base = solution.get("normalization") == "Ln_to_LnT"
-    if uses_normalized_base:
-        base = np.asarray(solution["base_spectrum"], dtype=float)
-        st.caption(solution.get("base_spectrum_source", "Espectro Ln,0 de referencia guardado."))
-        st.caption("La conversión desde Ln a LnT usa el volumen receptor: −10 log₁₀(0,16 V / (10 T₀)).")
-    edited = st.data_editor(pd.DataFrame({
-        "Hz": frequencies,
-        "ΔL piso [dB]": solution["delta_piso_por_banda"],
-        "ΔL cielo [dB]": solution["delta_cielo_por_banda"],
-    }), disabled=["Hz"], hide_index=True, key=f"{prefix}_spectra")
-    floor = edited["ΔL piso [dB]"].to_numpy(dtype=float)
-    ceiling = edited["ΔL cielo [dB]"].to_numpy(dtype=float)
-    if not np.isfinite(floor).all() or not np.isfinite(ceiling).all():
-        st.warning("Completa los 19 valores de ΔL del piso y del cielo.")
-        return
-    junctions = solution["flancos"]
-    if junctions:
-        with st.expander("Flancos recuperados · uniones y curvas por banda"):
-            st.dataframe(pd.DataFrame([
-                {
-                    "Flanco": flank.get("name", f"Unión {index}"),
-                    "Longitud [m]": flank["length"], "Kij [dB]": flank["kij"],
-                    "Unión": flank.get("junction_type"),
-                    "Masa emisor [kg/m²]": flank.get("mass_source"),
-                    "Masa receptor [kg/m²]": flank.get("mass_receiver"),
-                }
-                for index, flank in enumerate(junctions, start=1)
-            ]), hide_index=True)
-            st.json(junctions, expanded=False)
-    result = impact_detailed(base, frequencies, floor_improvement=floor, ceiling_improvement=ceiling,
-                             separating_area=area, receiver_t=t0 if uses_normalized_base else receiver_t,
-                             junctions=junctions, t0=t0)
-    curve = result["normalized_curve"]
-    if uses_normalized_base:
-        curve = result["total_curve"] - 10.0 * np.log10(0.16 * volume / (10.0 * t0))
-    indices = impact_rating(frequencies, curve)
-    lntw = indices["weighted"]
-    lnt50 = lntw + indices["ci50_2500"]
-    st.write(f"L′ₙT,w = **{lntw} dB** · L′ₙT,50 = **{lnt50} dB**")
-    st.dataframe(pd.DataFrame({"Hz": frequencies, "L′ₙT calculado [dB]": curve}), hide_index=True)
-
-    updated = dict(solution)
-    updated.pop("curva_base_con_flancos", None)
-    updated.update(
-        nombre=f"{solution.get('nombre', 'Impacto')} · copia",
-        geometria={**geometry, "superficie_separador_m2": area, "volumen_receptor_m3": volume,
-                   "reverberacion_receptor_s": receiver_t},
-        ln0w=ln0w, lnw=impact_rating(frequencies, result["total_curve"])["weighted"],
-        lntw=lntw, lnt50=lnt50, valor=lntw, ci=indices["ci"],
-        ci50_2500=indices["ci50_2500"], curva=curve.tolist(),
-        delta_piso_por_banda=floor.tolist(), delta_cielo_por_banda=ceiling.tolist(),
-        delta_lw_piso=float(ln0w - impact_rating(frequencies, base - floor)["weighted"]),
-        resultado_label=f"L′ₙT,w {lntw} dB · L′ₙT,50 {lnt50} dB",
-    )
-    if not np.array_equal(floor, solution["delta_piso_por_banda"]):
-        updated.pop("revestimiento_catalogo_id", None)
-        updated["tipo_piso"] = "Curva ΔL personalizada"
-    if not np.array_equal(ceiling, solution["delta_cielo_por_banda"]):
-        updated["tipo_cielo"] = "Curva ΔL personalizada"
-    updated["descripcion"] = f"ISO 12354-2 · {updated.get('tipo_piso', 'Piso')} · {updated.get('tipo_cielo', 'Cielo')}"
-    updated["estado_docente"] = "Predicción recalculada en Diseño. " + solution.get("estado_docente", "")
-    solution_save_widget(updated, key_prefix=prefix, target_project_id=project_id,
-                         target_requirement_id=requirement["id"],
-                         target_requirement_label=requirement.get("elemento"))
+        st.markdown("#### Datos guardados del cálculo")
+        st.caption("Las fichas antiguas pueden tener entradas sin registrar.")
+        tables = calculation_tables(solution)
+        for title, headers, rows in tables:
+            st.markdown("**" + title + "**")
+            st.dataframe(pd.DataFrame(rows, columns=headers), hide_index=True)
+        status, _ = solution_status(solution, requirement)
+        st.download_button(
+            "Descargar ficha en PDF", solution_pdf(solution, requirement, status, tables, columns),
+            file_name="sonara-ficha-tecnica.pdf", mime="application/pdf", key=f"{chart_key}_pdf",
+        )
 
 
 def app_proyectos():
@@ -10242,8 +10020,7 @@ def app_proyectos():
         )
         if chosen_project_id != current_project_id:
             st.session_state["active_project_id"] = chosen_project_id
-            for state_key in ("active_requirement_id", "active_requirement", "design_req_select",
-                              "impact_reload", "impact_reload_target"):
+            for state_key in ("active_requirement_id", "active_requirement", "design_req_select"):
                 st.session_state.pop(state_key, None)
             st.rerun()
 
@@ -10498,25 +10275,11 @@ def app_proyectos():
                 for i, r in enumerate(reqs):
                     if active_req and r.get("id") == active_req.get("id"):
                         default_idx = i
-                reload_target = st.session_state.pop("impact_reload_target", None)
-                for index, item in enumerate(reqs):
-                    if reload_target and item.get("id") == reload_target:
-                        st.session_state["design_req_select"] = labels[index]
-                        break
                 selected_label = st.selectbox("Elemento activo a diseñar", labels, index=default_idx, key="design_req_select")
                 req = reqs[labels.index(selected_label)]
                 st.session_state["active_requirement_id"] = req.get("id")
                 st.session_state["active_requirement"] = req
-                draft = st.session_state.get("impact_reload")
-                if draft and (draft["project"], draft["requirement"]) == (pid, req.get("id")):
-                    if draft["solution"].get("receta_diseno"):
-                        render_recipe_design(draft["solution"], pid, req)
-                    else:
-                        render_reloaded_impact(draft["solution"], pid, req)
-                elif req:
-                    app_project_calculator_embedded(p, req)
-                else:
-                    st.warning("Primero agrega un elemento a diseñar en la matriz acústica.")
+                app_project_calculator_embedded(p, req)
 
     # 5. Soluciones
     with tab_sol:
@@ -10553,22 +10316,9 @@ def app_proyectos():
                         key=f"solution_pick_{pid}_{selected_req['id']}",
                     )
                     sol = sols[selected_index]
-                    render_solution_detail(sol, chart_key=f"saved_solution_spectrum_{pid}_{selected_req['id']}")
-                    missing = impact_reload_missing(sol) if sol.get("modo") == "ISO 12354-2" else []
-                    if missing:
-                        st.caption("Faltan datos para reconstruir esta corrida: " + ", ".join(missing) + ".")
-                    elif sol.get("receta_diseno") or sol.get("modo") == "ISO 12354-2":
-                        if st.button("Abrir copia en Diseño", key="solution_open_impact"):
-                            st.session_state["impact_reload"] = {
-                                "project": pid, "requirement": selected_req["id"], "solution": sol,
-                            }
-                            st.session_state["impact_reload_target"] = selected_req["id"]
-                            st.rerun()
-                        draft = st.session_state.get("impact_reload")
-                        if draft and draft["project"] == pid and draft["solution"].get("id") == sol.get("id"):
-                            st.success("Copia preparada. Abre la pestaña Diseñar para editarla y recalcular.")
-                    else:
-                        st.caption("La solución no contiene todas las entradas necesarias para recalcular.")
+                    render_solution_detail(
+                        sol, selected_req, chart_key=f"saved_solution_spectrum_{pid}_{selected_req['id']}",
+                    )
                     c1, c2, c3 = st.columns(3)
                     with c1:
                         if st.button("🧠 Optimizar", use_container_width=True, key="opt_from_sol_v1"):
