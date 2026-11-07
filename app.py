@@ -9041,6 +9041,25 @@ def update_project_metadata(project_id, nombre, cliente, tipo, norma):
     return True
 
 
+def read_single_project(raw):
+    document = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(document, dict) or len(document) != 1:
+        raise ValueError("Selecciona un JSON de un solo proyecto. Para respaldos de cuenta usa Configuración → Datos.")
+    project_id, project = next(iter(document.items()))
+    if (not isinstance(project, dict) or not project_id or project.get("id") != project_id
+            or not isinstance(project.get("nombre"), str) or not project["nombre"].strip()
+            or any(not isinstance(project.get(key, []), list)
+                   or any(not isinstance(item, dict) for item in project.get(key, []))
+                   for key in ("recintos", "requerimientos", "soluciones"))):
+        raise ValueError("El archivo no contiene un proyecto válido de SONARA.")
+    for requirement in project.get("requerimientos", []):
+        solutions = requirement.get("soluciones", [])
+        if not isinstance(solutions, list) or any(not isinstance(item, dict) for item in solutions):
+            raise ValueError("El archivo contiene soluciones de elemento inválidas.")
+    json.dumps(project, allow_nan=False)
+    return project_id, project
+
+
 def active_project():
     projects = load_projects()
     pid = st.session_state.get("active_project_id")
@@ -10025,23 +10044,124 @@ def app_proyectos():
     df_targets = norm_targets_df()
     trial_usage_banner()
 
-    project_options = get_project_options()
-    if project_options:
-        current_project_id, _ = active_project()
-        project_ids = [project_id for project_id, _ in project_options]
-        project_names = dict(project_options)
-        chosen_project_id = st.selectbox(
-            "Abrir proyecto guardado",
-            project_ids,
-            index=project_ids.index(current_project_id) if current_project_id in project_ids else 0,
-            format_func=lambda project_id: project_names[project_id],
-            key=f"saved_project_picker_{current_project_id}",
+    pid, current = active_project()
+    if st.session_state.pop("reset_project_create", False):
+        for key in list(st.session_state):
+            if key.startswith("project_create_"):
+                st.session_state.pop(key, None)
+    notice = st.session_state.pop("project_metadata_notice", None)
+    if notice:
+        st.success(notice)
+
+    new_col, save_col, export_col, open_col = st.columns(4)
+    if new_col.button("Nuevo", use_container_width=True):
+        st.session_state["new_project_draft"] = True
+        st.session_state["reset_project_create"] = True
+        st.session_state.pop("open_project_panel", None)
+        st.rerun()
+    drafting = st.session_state.get("new_project_draft", False) or current is None
+    save_requested = save_col.button("Guardar", use_container_width=True, help="Guarda en tu cuenta.")
+    if drafting:
+        export_col.button("Guardar como JSON", disabled=True, use_container_width=True)
+    else:
+        export_col.download_button(
+            "Guardar como JSON",
+            json.dumps({pid: current}, ensure_ascii=False, indent=2, default=_json_default),
+            file_name=f"{make_project_id(current.get('nombre') or pid)}.json",
+            mime="application/json",
+            help="Descarga el proyecto tal como quedó en el último guardado.",
+            use_container_width=True,
         )
-        if chosen_project_id != current_project_id:
-            st.session_state["active_project_id"] = chosen_project_id
-            for state_key in ("active_requirement_id", "active_requirement", "design_req_select"):
-                st.session_state.pop(state_key, None)
-            st.rerun()
+    if open_col.button("Abrir", use_container_width=True):
+        st.session_state["open_project_panel"] = not st.session_state.get("open_project_panel", False)
+
+    def open_project(project_id):
+        st.session_state["active_project_id"] = project_id
+        for key in ("active_requirement_id", "active_requirement", "design_req_select",
+                    "new_project_draft", "open_project_panel",
+                    "selected_solution_for_optimizer", "selected_requirement_for_optimizer",
+                    "selected_solution_for_cubicacion"):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+    if st.session_state.get("open_project_panel"):
+        with st.container(border=True):
+            options = get_project_options()
+            if options:
+                names = dict(options)
+                selected = st.selectbox(
+                    "Proyectos de tu cuenta", list(names), index=None, placeholder="Selecciona un proyecto",
+                    format_func=lambda key: names[key], key="project_open_selection",
+                )
+                if st.button("Abrir proyecto seleccionado", disabled=selected is None):
+                    open_project(selected)
+            else:
+                st.info("Tu cuenta todavía no tiene proyectos guardados.")
+            uploaded = st.file_uploader("Abrir desde un archivo JSON de SONARA", type=["json"], key="project_open_json")
+            if st.button("Importar y abrir", disabled=uploaded is None):
+                try:
+                    projects = load_projects()
+                    imported_id, imported_project = read_single_project(uploaded.getvalue())
+                    if imported_id in projects and projects[imported_id] != imported_project:
+                        raise ValueError("Ya existe una versión distinta de este proyecto. Abre la versión de tu cuenta desde el selector.")
+                except (ValueError, UnicodeError) as exc:
+                    st.error(str(exc))
+                else:
+                    if imported_id not in projects:
+                        allowed, message = can_create_project()
+                        if not allowed:
+                            st.error(message)
+                        else:
+                            projects[imported_id] = imported_project
+                            save_projects(projects)
+                            open_project(imported_id)
+                    else:
+                        open_project(imported_id)
+
+    def project_fields(values, key):
+        nombre = st.text_input("Nombre del proyecto", value=values.get("nombre") or "", key=f"{key}_name")
+        cliente = st.text_input("Cliente / mandante", value=values.get("cliente") or "", key=f"{key}_client")
+        sectores = sorted(df_targets["sector"].unique().tolist())
+        saved_type = values.get("tipo")
+        tipos = sectores if not saved_type or saved_type in sectores else [saved_type, *sectores]
+        tipo = st.selectbox(
+            "Tipo de proyecto", tipos, index=tipos.index(saved_type) if saved_type in tipos else None,
+            placeholder="Selecciona un tipo", key=f"{key}_type",
+        )
+        normas = ["Todas"] + sorted(df_targets[df_targets["sector"] == tipo]["norma"].unique().tolist())
+        saved_norm = (values.get("norma") or "Todas") if values and tipo == saved_type else None
+        if saved_norm and saved_norm not in normas:
+            normas.append(saved_norm)
+        norma = st.selectbox(
+            "Norma / referencia principal", normas, index=normas.index(saved_norm) if saved_norm else None,
+            placeholder="Selecciona una referencia", disabled=tipo is None, key=f"{key}_norm_{tipo}",
+        )
+        return nombre.strip(), cliente.strip(), tipo, norma or "Todas"
+
+    if drafting:
+        st.subheader("Nuevo proyecto")
+        st.caption("Completa el nombre y el tipo y pulsa Guardar para habilitar Recintos, Elementos y Diseño.")
+        nombre, cliente, tipo, norma = project_fields({}, "project_create")
+        if save_requested:
+            if not nombre or tipo is None:
+                st.error("Ingresa un nombre y selecciona el tipo de proyecto.")
+            else:
+                df_base = df_targets[df_targets["sector"] == tipo]
+                if norma != "Todas":
+                    df_base = df_base[df_base["norma"] == norma]
+                r0 = df_base.iloc[0]
+                objetivo_default = {
+                    "sector": r0["sector"], "norma": r0["norma"], "elemento": r0["elemento"],
+                    "indicador": r0["indicador"], "sentido": r0["sentido"], "valor": float(r0["valor"]),
+                    "unidad": r0["unidad"], "fuente": r0["fuente"],
+                    "recinto_emisor": "", "recinto_receptor": "", "tipo_elemento": "Paramento vertical",
+                }
+                created = create_project(nombre, cliente, tipo, norma, objetivo_default)
+                if created:
+                    st.session_state["project_metadata_notice"] = "Proyecto nuevo guardado."
+                    st.session_state["reset_project_create"] = True
+                    open_project(created)
+        return
 
     tab_datos, tab_recintos, tab_matriz, tab_diseno, tab_sol, tab_opt, tab_costos, tab_informe = st.tabs([
         "📌 Proyecto",
@@ -10059,61 +10179,14 @@ def app_proyectos():
         col1, col2 = st.columns([0.9, 1.3], gap="large")
         with col1:
             st.markdown("<div class='sonara-card-title'>Datos del proyecto</div>", unsafe_allow_html=True)
-            pid, current = active_project()
-            notice = st.session_state.pop("project_metadata_notice", None)
-            if notice:
-                st.success(notice)
-            if st.session_state.pop("reset_project_create", False):
-                for key in list(st.session_state):
-                    if key.startswith("project_create_"):
-                        st.session_state.pop(key, None)
-
-            def project_fields(values, key):
-                nombre = st.text_input("Nombre del proyecto", value=values.get("nombre") or "", key=f"{key}_name")
-                cliente = st.text_input("Cliente / mandante", value=values.get("cliente") or "", key=f"{key}_client")
-                sectores = sorted(df_targets["sector"].unique().tolist())
-                saved_type = values.get("tipo") or "Vivienda"
-                tipos = sectores if saved_type in sectores or not values else [saved_type, *sectores]
-                tipo = st.selectbox("Tipo de proyecto", tipos,
-                                    index=tipos.index(saved_type) if saved_type in tipos else 0, key=f"{key}_type")
-                normas = ["Todas"] + sorted(df_targets[df_targets["sector"] == tipo]["norma"].unique().tolist())
-                saved_norm = (values.get("norma") or "Todas") if tipo == saved_type else "Todas"
-                if saved_norm not in normas:
-                    normas.append(saved_norm)
-                norma = st.selectbox("Norma / referencia principal", normas,
-                                     index=normas.index(saved_norm), key=f"{key}_norm_{tipo}")
-                return nombre.strip(), cliente.strip(), tipo, norma
-
-            if current:
-                st.caption("Edita los datos generales del proyecto abierto. Sus recintos, objetivos y soluciones se conservan.")
-                fields = project_fields(current, f"project_edit_{pid}")
-                if st.button("Guardar cambios del proyecto", use_container_width=True, key=f"save_metadata_{pid}"):
-                    if not fields[0]:
-                        st.error("Ingresa un nombre para el proyecto.")
-                    elif update_project_metadata(pid, *fields):
-                        st.session_state["project_metadata_notice"] = "Datos del proyecto guardados."
-                        st.rerun()
-
-            with st.expander("Nuevo proyecto", expanded=current is None):
-                nombre, cliente, tipo, norma = project_fields({}, "project_create")
-                if st.button("Crear nuevo proyecto", use_container_width=True, key="create_project"):
-                    if not nombre:
-                        st.error("Ingresa un nombre para el proyecto nuevo.")
-                    else:
-                        df_base = df_targets[df_targets["sector"] == tipo]
-                        if norma != "Todas":
-                            df_base = df_base[df_base["norma"] == norma]
-                        r0 = df_base.iloc[0]
-                        objetivo_default = {
-                            "sector": r0["sector"], "norma": r0["norma"], "elemento": r0["elemento"],
-                            "indicador": r0["indicador"], "sentido": r0["sentido"], "valor": float(r0["valor"]),
-                            "unidad": r0["unidad"], "fuente": r0["fuente"],
-                            "recinto_emisor": "", "recinto_receptor": "", "tipo_elemento": "Paramento vertical",
-                        }
-                        if create_project(nombre, cliente, tipo, norma, objetivo_default):
-                            st.session_state["project_metadata_notice"] = "Proyecto nuevo creado."
-                            st.session_state["reset_project_create"] = True
-                            st.rerun()
+            st.caption("Usa Guardar para aplicar los cambios a este proyecto.")
+            nombre, cliente, tipo, norma = project_fields(current, f"project_edit_{pid}")
+            if save_requested:
+                if not nombre or tipo is None:
+                    st.error("Ingresa un nombre y selecciona el tipo de proyecto.")
+                elif update_project_metadata(pid, nombre, cliente, tipo, norma):
+                    st.session_state["project_metadata_notice"] = "Datos del proyecto guardados."
+                    st.rerun()
 
         with col2:
             pid, p = active_project()
