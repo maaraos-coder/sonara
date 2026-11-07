@@ -9017,6 +9017,11 @@ def get_project_options():
 
 
 def solution_status(solution, objetivo):
+    if solution.get("verificacion_docente") == "pendiente":
+        return "Por verificar", None
+    if objetivo.get("caso_codigo") == "IM-01" and solution.get("lnt50") is not None:
+        if float(solution["lnt50"]) > 50:
+            return "No cumple baja frecuencia", float(solution["lnt50"]) - 50
     indicador = str(objetivo.get("indicador", "Rw"))
     try:
         meta = float(objetivo.get("valor", 0))
@@ -9869,9 +9874,138 @@ def app_project_calculator_embedded(project, requirement):
         app_lluvia()
 
 
+def render_recipe_design(solution, project_id, requirement):
+    recipe = solution["receta_diseno"]
+    method = recipe["metodo"]
+    prefix = f"recipe_{project_id}_{requirement['id']}_{solution['id']}"
+    st.subheader("Copia de diseño · " + solution["nombre"])
+    if st.button("Cerrar copia y volver al formulario de diseño", key=f"{prefix}_close"):
+        st.session_state.pop("impact_reload", None)
+        st.rerun()
+    render_solution_detail(solution)
+    labels = {"area": "Área separadora [m²]", "volume": "Volumen receptor [m³]",
+              "tr": "TR receptor [s]", "t0": "TR de referencia [s]",
+              "shape": "Corrección de forma ΔLfs [dB]", "lden": "Lden [dB]",
+              "source_absorption": "Absorción emisora [m²]",
+              "receiver_absorption": "Absorción receptora [m²]"}
+    inputs = dict(recipe)
+    for key, label in labels.items():
+        if key in recipe:
+            inputs[key] = st.number_input(label, value=float(recipe[key]),
+                                          min_value=None if key in ("shape", "lden") else 0.01,
+                                          key=f"{prefix}_{key}")
+
+    def edit_spectrum(freq, values, label, key):
+        edited = st.data_editor(pd.DataFrame({"Hz": freq, label: np.asarray(values, dtype=float)}),
+                                disabled=["Hz"], hide_index=True, key=f"{prefix}_{key}")
+        return edited[label].to_numpy(dtype=float)
+
+    draft = dict(solution)
+    if method == "AI":
+        freq = solution["frecuencias_hz"]
+        direct = edit_spectrum(freq, solution["separador"]["curva"], "R separador [dB]", "direct")
+        if not np.isfinite(direct).all():
+            st.warning("Completa todas las bandas del separador.")
+            return
+        result = airborne_detailed(direct, freq, inputs["area"], inputs["volume"],
+                                   solution["flancos"], inputs["t0"])
+        curve = result["dnt_curve"]
+        rating = airborne_single_numbers(freq, curve)
+        w = rating["weighted"]
+        low = w + rating["c50_3150"]
+        draft.update(dntw=w, dnt50=low, valor=low, dnt_a=w + rating["c"], dnt_atr=w + rating["ctr"],
+                     dnt_por_banda_db=curve.tolist(),
+                     separador={**solution["separador"], "curva": direct.tolist(),
+                                "rw_db": airborne_single_numbers(freq, direct)["weighted"]},
+                     geometria={"superficie_separador_m2": inputs["area"],
+                                "volumen_receptor_m3": inputs["volume"],
+                                "reverberacion_receptor_s": inputs["tr"],
+                                "reverberacion_referencia_s": inputs["t0"]},
+                     resultado_label=f"DₙT,w {w} dB · DₙT,50 {low} dB")
+    elif method == "FA":
+        elements = []
+        spectra = []
+        components = []
+        for index, (component, spectrum) in enumerate(zip(solution["componentes"], solution["espectros_componentes"])):
+            name = spectrum["nombre"]
+            f = spectrum["frecuencias"]
+            with st.expander(name, expanded=True):
+                area = st.number_input("Área [m²]", min_value=0.01, value=float(component["Área [m²]"]),
+                                       key=f"{prefix}_area_{index}")
+                reduction = edit_spectrum(f, spectrum["curva"], "R [dB]", f"fa_{index}")
+            if not np.isfinite(reduction).all():
+                st.warning("Completa todas las bandas del componente.")
+                return
+            elements.append({"name": name, "area": area, "frequencies": f, "curve": reduction})
+            spectra.append({**spectrum, "curva": reduction.tolist()})
+            numbers = airborne_single_numbers(f, reduction)
+            components.append({**component, "Área [m²]": area, "Rw [dB]": numbers["weighted"],
+                               "C [dB]": numbers["c"], "Ctr [dB]": numbers["ctr"]})
+        result = facade_detailed(elements, inputs["volume"], sum(e["area"] for e in elements),
+                                 inputs["shape"])
+        freq = result["frequencies"]
+        curve = result["d2mnt_curve"]
+        rating = airborne_single_numbers(freq, curve)
+        w = rating["weighted"]
+        atr = w + rating["ctr"]
+        draft.update(curva=curve.tolist(), d2mntw=w, d2mnt_atr=atr, valor=atr,
+                     lden=inputs["lden"], componentes=components, espectros_componentes=spectra,
+                     resultado_label=f"D₂m,nT,w {w} dB · D₂m,nT,Atr {atr} dB")
+    else:
+        freq = solution["frecuencias"]
+        source = edit_spectrum(freq, inputs["source_curve"], "Lw de la fuente [dB]", "source")
+        reduction = edit_spectrum(freq, inputs["reduction_curve"], "R del cierre [dB]", "shaft")
+        if not np.isfinite(source).all() or not np.isfinite(reduction).all():
+            st.warning("Completa las bandas de la fuente y del cierre.")
+            return
+        paths = [{"kind": "airborne_adjacent", "frequencies": freq, "source_curve": source,
+                  "reduction_curve": reduction, "source_absorption": inputs["source_absorption"],
+                  "separating_area": inputs["area"]}]
+        result = service_equipment_detailed(paths, inputs["receiver_absorption"], inputs["tr"], inputs["t0"])
+        curve = result["normalized_curve"]
+        level = result["la_normalized"]
+        inputs.update(source_curve=source.tolist(), reduction_curve=reduction.tolist())
+        draft.update(curva=curve.tolist(), r_separador_octavas=reduction.tolist(),
+                     lafmax_nt=level, la_normalized=level, valor=level,
+                     estado_docente="Predicción por vía aérea; máximo total pendiente.",
+                     resultado_label=f"LAFmax,nT aéreo proyectado {level:.1f} dB(A)")
+    if not np.isfinite(curve).all():
+        st.warning("Completa los valores de todas las bandas para recalcular.")
+        return
+    st.markdown("#### Resultado recalculado")
+    st.write(draft["resultado_label"])
+    st.dataframe(pd.DataFrame({"Hz": freq, "Resultado [dB]": curve}), hide_index=True)
+    draft.update(nombre=f"{solution['nombre']} · copia", receta_diseno=inputs)
+    solution_save_widget(draft, key_prefix=prefix, target_project_id=project_id,
+                         target_requirement_id=requirement["id"],
+                         target_requirement_label=requirement.get("elemento"))
+
+
 def render_solution_detail(solution):
     """Show recorded values, including legacy solutions with partial inputs."""
     with st.expander("Ficha técnica de la solución", expanded=True):
+        layers = solution.get("armado_docente") or []
+        if layers:
+            st.markdown("#### Visual constructivo · esquema de capas y componentes")
+            tiles = "".join(
+                f"<div style='padding:10px;border:1px solid #55738e;background:#173450;color:#fff'>"
+                f"{html.escape(layer)}</div>" for layer in layers
+            )
+            st.markdown(f"<div style='display:grid;gap:4px'>{tiles}</div>", unsafe_allow_html=True)
+        if solution.get("modo") == "ISO 12354-2":
+            components.html(impact_construction_html(
+                solution.get("espesor"), solution.get("tipo_piso", "Sin revestimiento"),
+                solution.get("tipo_cielo", "Sin cielo")), height=410, scrolling=True)
+        recipe = solution.get("receta_diseno")
+        if recipe:
+            st.markdown("#### Entradas de cálculo")
+            labels = {"area": "Área separadora [m²]", "volume": "Volumen [m³]", "tr": "TR [s]",
+                      "t0": "TR de referencia [s]", "shape": "ΔLfs [dB]", "lden": "Lden [dB]",
+                      "source_absorption": "Absorción emisora [m²]", "receiver_absorption": "Absorción receptora [m²]"}
+            st.dataframe(pd.DataFrame([(label, recipe[key]) for key, label in labels.items() if key in recipe],
+                                      columns=["Parámetro", "Valor"]), hide_index=True)
+        if solution.get("componentes"):
+            st.dataframe(pd.DataFrame(solution["componentes"]), hide_index=True)
         description = solution.get("descripcion")
         if description:
             st.write(description)
@@ -9908,8 +10042,26 @@ def render_solution_detail(solution):
             curve = solution.get(key)
             if frequencies and isinstance(curve, list) and len(curve) == len(frequencies):
                 columns[label] = curve
+        if recipe and recipe.get("metodo") == "IN":
+            columns["Lw fuente [dB]"] = recipe["source_curve"]
+            columns["R cierre [dB]"] = recipe["reduction_curve"]
+        direct = (solution.get("separador") or {}).get("curva")
+        if direct and len(direct) == len(frequencies):
+            columns["R separador [dB]"] = direct
         if len(columns) > 1:
+            st.markdown("#### Curvas y tabla por bandas")
+            figure = go.Figure()
+            for label, curve in columns.items():
+                if label != "Hz":
+                    figure.add_scatter(x=frequencies, y=curve, mode="lines+markers", name=label)
+            style_acoustic_spectrum(figure, frequencies, height=380)
+            st.plotly_chart(figure, use_container_width=True)
             st.dataframe(pd.DataFrame(columns), hide_index=True)
+        for spectrum in solution.get("espectros_componentes") or []:
+            if "curva" in spectrum and "frecuencias" in spectrum:
+                with st.expander(f"Espectro del componente · {spectrum.get('nombre', '')}"):
+                    st.dataframe(pd.DataFrame({"Hz": spectrum["frecuencias"], "R [dB]": spectrum["curva"]}),
+                                 hide_index=True)
 
         with st.expander("Registro guardado · materiales, flancos y otros datos"):
             st.json(solution, expanded=1)
@@ -10317,7 +10469,10 @@ def app_proyectos():
                 st.session_state["active_requirement"] = req
                 draft = st.session_state.get("impact_reload")
                 if draft and (draft["project"], draft["requirement"]) == (pid, req.get("id")):
-                    render_reloaded_impact(draft["solution"], pid, req)
+                    if draft["solution"].get("receta_diseno"):
+                        render_recipe_design(draft["solution"], pid, req)
+                    else:
+                        render_reloaded_impact(draft["solution"], pid, req)
                 elif req:
                     app_project_calculator_embedded(p, req)
                 else:
@@ -10359,11 +10514,11 @@ def app_proyectos():
                     )
                     sol = sols[selected_index]
                     render_solution_detail(sol)
-                    if sol.get("modo") == "ISO 12354-2":
-                        missing = impact_reload_missing(sol)
-                        if missing:
-                            st.caption("Faltan datos para reconstruir esta corrida: " + ", ".join(missing) + ".")
-                        elif st.button("Abrir copia en Diseño", key="solution_open_impact"):
+                    missing = impact_reload_missing(sol) if sol.get("modo") == "ISO 12354-2" else []
+                    if missing:
+                        st.caption("Faltan datos para reconstruir esta corrida: " + ", ".join(missing) + ".")
+                    elif sol.get("receta_diseno") or sol.get("modo") == "ISO 12354-2":
+                        if st.button("Abrir copia en Diseño", key="solution_open_impact"):
                             st.session_state["impact_reload"] = {
                                 "project": pid, "requirement": selected_req["id"], "solution": sol,
                             }
@@ -10373,7 +10528,7 @@ def app_proyectos():
                         if draft and draft["project"] == pid and draft["solution"].get("id") == sol.get("id"):
                             st.success("Copia preparada. Abre la pestaña Diseñar para editarla y recalcular.")
                     else:
-                        st.caption("La recarga de entradas está disponible para impacto ISO 12354-2.")
+                        st.caption("La solución no contiene todas las entradas necesarias para recalcular.")
                     c1, c2, c3 = st.columns(3)
                     with c1:
                         if st.button("🧠 Optimizar", use_container_width=True, key="opt_from_sol_v1"):
