@@ -3543,10 +3543,25 @@ def app_iso12354(project=None, requirement=None):
                 f'{html.escape(name)}</strong>'
                 f'<div style="margin-top:6px;">{origin} → {destination}</div></div>'
             )
+        diagram = (
+            '<svg viewBox="0 0 480 210" role="img" aria-label="Corte de dos recintos contiguos con muro separador" '
+            'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
+            '<rect x="16" y="15" width="448" height="178" rx="12" fill="#081522"/>'
+            '<path d="M38 160V62H442V160Z" fill="#11263A" stroke="#8299AF" stroke-width="4"/>'
+            '<rect x="233" y="62" width="14" height="98" fill="#8299AF"/>'
+            '<g fill="#EAF4FF" font-size="16" font-weight="650" text-anchor="middle">'
+            '<text x="132" y="92">Recinto emisor</text><text x="346" y="92">Recinto receptor</text>'
+            '<text x="240" y="184" font-size="13">Muro separador</text></g>'
+            '<path d="M144 123H330" fill="none" stroke="#4F7CFF" stroke-width="4"/>'
+            '<path d="M330 117L341 123L330 129Z" fill="#4F7CFF"/>'
+            '<text x="295" y="115" fill="#AFC5FF" font-size="13">Dd</text>'
+            '</svg>'
+        )
         return (
             '<div class="sonara-card"><div class="sonara-card-title">Esquema de caminos de transmisión</div>'
-            '<p>Lectura de cada camino: lado emisor → lado receptor. '
-            'Los nombres, colores y trazos coinciden con las curvas por bandas.</p>'
+            + diagram +
+            '<p>La flecha muestra el camino directo Dd. Las fichas de abajo identifican los caminos calculados, '
+            'con los mismos colores y trazos que las curvas por bandas.</p>'
             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));'
             'gap:8px;color:#EAF4FF;">' + "".join(cards) + '</div></div>'
         )
@@ -4273,75 +4288,45 @@ def energetic_sum_levels(levels):
     return 10.0 * np.log10(np.sum(10 ** (arr / 10.0), axis=0))
 
 
-def impact_transmission_scheme_html(flanks_active):
-    """
-    Esquema dinámico para caminos de impacto.
-    """
-    show_muro1 = "Muro lateral 1" in flanks_active
-    show_muro2 = "Muro lateral 2" in flanks_active
-    show_fachada = "Fachada / elemento lateral" in flanks_active
-    show_tabique = "Tabique separador / elemento vertical" in flanks_active
-
-    muro1 = """
-        <div style="position:absolute;left:5%;top:20%;height:60%;border-left:5px dashed #FF8A1F;"></div>
-        <div style="position:absolute;left:7%;top:74%;width:45%;border-top:4px dashed #FF8A1F;"></div>
-        <div style="position:absolute;left:22%;top:66%;color:#FF9F2E;font-weight:900;">Flanco muro 1</div>
-    """ if show_muro1 else ""
-
-    muro2 = """
-        <div style="position:absolute;right:5%;top:20%;height:60%;border-right:5px dashed #A855F7;"></div>
-        <div style="position:absolute;left:50%;top:23%;width:45%;border-top:4px dashed #A855F7;"></div>
-        <div style="position:absolute;left:68%;top:15%;color:#C084FC;font-weight:900;">Flanco muro 2</div>
-    """ if show_muro2 else ""
-
-    fachada = """
-        <div style="position:absolute;left:8%;bottom:8%;width:84%;height:7px;background:#38BDF8;border-radius:10px;"></div>
-        <div style="position:absolute;left:47%;bottom:11%;height:27%;border-left:4px dashed #38BDF8;"></div>
-        <div style="position:absolute;left:50%;bottom:17%;color:#7DD3FC;font-weight:900;">Fachada</div>
-    """ if show_fachada else ""
-
-    tabique = """
-        <div style="position:absolute;left:45%;top:12%;height:26%;border-left:4px dashed #22C55E;"></div>
-        <div style="position:absolute;left:48%;top:10%;color:#00E08A;font-weight:900;">Tabique</div>
-    """ if show_tabique else ""
-
-    return textwrap.dedent(f"""
-    <div class="sonara-card" style="margin-top:20px;">
-        <div class="sonara-card-title">Esquema de caminos de impacto</div>
-        <div style="position:relative;height:330px;margin-top:10px;">
-
-            <div style="position:absolute;left:10%;top:12%;width:80%;height:9px;background:#94A3B8;border-radius:10px;"></div>
-            <div style="position:absolute;left:10%;top:68%;width:80%;height:9px;background:#64748B;border-radius:10px;"></div>
-
-            <div style="position:absolute;left:12%;top:21%;width:32%;height:42%;
-                background:linear-gradient(135deg,#1b2735,#07111d);
-                border:5px solid #7f8791;border-radius:4px;
-                box-shadow:inset 0 0 22px rgba(0,0,0,.65);">
-            </div>
-
-            <div style="position:absolute;right:12%;top:21%;width:32%;height:42%;
-                background:linear-gradient(135deg,#1b2735,#07111d);
-                border:5px solid #7f8791;border-radius:4px;
-                box-shadow:inset 0 0 22px rgba(0,0,0,.65);">
-            </div>
-
-            <div style="position:absolute;left:50%;top:13%;height:52%;border-left:5px solid #0A84FF;"></div>
-            <div style="position:absolute;left:47%;top:56%;width:0;height:0;
-                border-left:14px solid transparent;border-right:14px solid transparent;border-top:20px solid #0A84FF;">
-            </div>
-            <div style="position:absolute;left:52%;top:35%;color:#42A5FF;font-weight:900;">Directo<br><span style="font-size:13px;color:#42A5FF;">losa → recinto</span></div>
-
-            {muro1}
-            {muro2}
-            {fachada}
-            {tabique}
-
-            <div style="position:absolute;left:16%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto emisor / piso superior</div>
-            <div style="position:absolute;right:13%;bottom:0;color:#EAF4FF;font-weight:700;">Recinto receptor</div>
-        </div>
-    </div>
-    """)
-
+def impact_transmission_scheme_html(flank_styles):
+    """Corte esquemático con la losa entre el emisor y el receptor."""
+    routes = {
+        "Muro lateral 1": ("M183 113H77V207H145", 145, 207),
+        "Muro lateral 2": ("M297 113H403V207H335", 335, 207),
+        "Fachada / elemento lateral": ("M155 113H49V231H115", 115, 231),
+        "Tabique separador / elemento vertical": ("M327 113H431V231H365", 365, 231),
+    }
+    arrows = []
+    legend = ['<div style="color:#67DFFF">● Directo · losa → recinto receptor</div>']
+    for name, color in flank_styles.items():
+        if name not in routes:
+            continue
+        route, x, y = routes[name]
+        sign = 1 if x < 240 else -1
+        arrows.append(
+            f'<path d="{route}" fill="none" stroke="{color}" stroke-width="3" stroke-dasharray="6 5"/>'
+            f'<path d="M{x} {y}l{-sign * 10} -5v10z" fill="{color}"/>'
+        )
+        legend.append(f'<div style="color:{color}">┅ {html.escape(name)}</div>')
+    return (
+        '<div class="sonara-card"><div class="sonara-card-title">Corte · caminos de impacto</div>'
+        '<svg viewBox="0 0 480 294" role="img" aria-label="Recinto emisor arriba y recinto receptor abajo" '
+        'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
+        '<rect x="15" y="12" width="450" height="266" rx="12" fill="#081522"/>'
+        '<path d="M77 246V36H403V246Z" fill="#11263A" stroke="#8299AF" stroke-width="4"/>'
+        '<rect x="77" y="117" width="326" height="20" fill="#8299AF"/>'
+        '<g fill="#EAF4FF" font-size="16" font-weight="650" text-anchor="middle">'
+        '<text x="240" y="63">Recinto emisor · piso superior</text>'
+        '<text x="240" y="267">Recinto receptor · piso inferior</text>'
+        '<text x="141" y="131" fill="#081522" font-size="12">Losa separadora</text></g>'
+        '<path d="M240 85V188" stroke="#00D4FF" stroke-width="4"/>'
+        '<path d="M234 187H246L240 199Z" fill="#00D4FF"/>'
+        '<text x="251" y="176" fill="#67DFFF" font-size="13">Directo</text>'
+        + "".join(arrows) + '</svg>'
+        '<div style="display:grid;gap:5px">' + "".join(legend) + '</div>'
+        '<p style="font-size:.9em;margin:.65rem 0 0">Los trazos discontinuos indican los flancos activos. '
+        'Su posición en el corte es esquemática.</p></div>'
+    )
 
 
 def impact_construction_html(slab_mm, floor_name, ceiling_name, cover=None):
@@ -4642,6 +4627,7 @@ def app_impacto():
     ln_direct = ln0_curve - delta_piso - delta_cielo
 
     active_flank_names = []
+    impact_flank_styles = {}
 
     if modo_impacto == "Simplificado":
         levels = [ln_direct]
@@ -4753,11 +4739,12 @@ def app_impacto():
         )
 
         if modo_impacto == "ISO 12354-2":
-            components.html(
-                impact_transmission_scheme_html(active_flank_names),
-                height=390,
-                scrolling=False
-            )
+            colors = ["#FF9F43", "#C084FC", "#FCD34D", "#5EEAD4"]
+            impact_flank_styles = {
+                path["name"]: colors[index]
+                for index, path in enumerate(impact_result["paths"][1:])
+            }
+            st.markdown(impact_transmission_scheme_html(impact_flank_styles), unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -4775,7 +4762,7 @@ def app_impacto():
             for path in impact_result["paths"][1:]:
                 fig.add_trace(go.Scatter(
                     x=freqs, y=np.round(path["curve"], 1), mode="lines",
-                    name=path["name"], line=dict(width=1.2, dash="dot"), opacity=0.7,
+                    name=path["name"], line=dict(color=impact_flank_styles[path["name"]], width=2, dash="dash"),
                 ))
         fig.add_trace(go.Scatter(x=freqs, y=np.round(lnT, 1), mode="lines+markers",
                                  name="L'nT", line=dict(color="#00E08A", width=3), marker=dict(size=6)))
