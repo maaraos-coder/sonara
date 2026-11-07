@@ -3546,22 +3546,23 @@ def app_iso12354(project=None, requirement=None):
         diagram = (
             '<svg viewBox="0 0 480 210" role="img" aria-label="Corte de dos recintos contiguos con muro separador" '
             'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
-            '<rect x="16" y="15" width="448" height="178" rx="12" fill="#081522"/>'
-            '<path d="M38 160V62H442V160Z" fill="#11263A" stroke="#8299AF" stroke-width="4"/>'
-            '<rect x="233" y="62" width="14" height="98" fill="#8299AF"/>'
+            '<rect x="16" y="15" width="448" height="185" rx="12" fill="#081522"/>'
+            '<path d="M38 177V54H442V177Z" fill="#11263A" stroke="#8299AF" stroke-width="4"/>'
+            '<rect x="233" y="54" width="14" height="123" fill="#8299AF"/>'
             '<g fill="#EAF4FF" font-size="16" font-weight="650" text-anchor="middle">'
-            '<text x="132" y="92">Recinto emisor</text><text x="346" y="92">Recinto receptor</text>'
-            '<text x="240" y="184" font-size="13">Muro separador</text></g>'
+            '<text x="132" y="38">Recinto emisor</text><text x="346" y="38">Recinto receptor</text>'
+            '<text x="240" y="194" font-size="13">Muro separador</text></g>'
             '<path d="M144 123H330" fill="none" stroke="#4F7CFF" stroke-width="4"/>'
             '<path d="M330 117L341 123L330 129Z" fill="#4F7CFF"/>'
             '<text x="295" y="115" fill="#AFC5FF" font-size="13">Dd</text>'
-            '</svg>'
+            + airborne_flank_paths_svg(path_styles) + '</svg>'
         )
         return (
-            '<div class="sonara-card"><div class="sonara-card-title">Esquema de caminos de transmisión</div>'
-            + diagram +
-            '<p>La flecha muestra el camino directo Dd. Las fichas de abajo identifican los caminos calculados, '
-            'con los mismos colores y trazos que las curvas por bandas.</p>'
+            '<div class="sonara-card"><div class="sonara-card-title">Isométrica esquemática · caminos de transmisión</div>'
+            + iso_room_diagram(impact=False, flank_styles={}, path_styles=path_styles)
+            + '<details><summary>Corte del muro separador</summary>' + diagram + '</details>'
+            '<p>La flecha azul muestra el camino directo Dd. Los demás trazos representan los caminos laterales '
+            'activos. Su posición es esquemática y sus colores y trazos coinciden con las curvas por bandas.</p>'
             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));'
             'gap:8px;color:#EAF4FF;">' + "".join(cards) + '</div></div>'
         )
@@ -4288,6 +4289,94 @@ def energetic_sum_levels(levels):
     return 10.0 * np.log10(np.sum(10 ** (arr / 10.0), axis=0))
 
 
+def airborne_flank_paths_svg(path_styles, *, isometric=False):
+    """Draw each calculated lateral path across the room pair."""
+    flanks = {}
+    parts = []
+    middle = 280 if isometric else 240
+    upper, lower = (128, 272) if isometric else (54, 177)
+    for name, style in path_styles.items():
+        code, separator, flank = name.partition(" · ")
+        if not separator or code not in ("Df", "Fd", "Ff"):
+            continue
+        index = flanks.setdefault(flank, len(flanks))
+        edge = upper + 8 * (index // 2) if index % 2 == 0 else lower - 8 * (index // 2)
+        spread = {"Df": -4, "Fd": 0, "Ff": 4}[code]
+        edge += spread
+        side = -1 if index % 2 == 0 else 1
+        inlet, outlet = middle - 94 - spread * 2, middle + 94 + spread * 2
+        separator_y = edge - side * (26 + 5 * (index // 2))
+        flank_y = edge - side * 12
+        source_y = separator_y if code[0] == "D" else flank_y
+        receiver_y = separator_y if code[1] == "d" else flank_y
+        left_joint, right_joint = middle - 11, middle + 11
+        color = style["color"]
+        dash = {"solid": "", "dash": ' stroke-dasharray="6 4"', "dot": ' stroke-dasharray="2 4"'}[style["dash"]]
+        parts.append(
+            f'<path d="M{inlet} {source_y}H{left_joint}L{middle} {edge}L{right_joint} {receiver_y}H{outlet}" '
+            f'fill="none" stroke="{color}" stroke-width="2"{dash}><title>{html.escape(name)}</title></path>'
+            f'<path d="M{outlet - 7} {receiver_y - 4}L{outlet} {receiver_y}L{outlet - 7} {receiver_y + 4}Z" fill="{color}"/>'
+        )
+    return "".join(parts)
+
+
+def iso_room_diagram(*, impact, flank_styles, path_styles=None):
+    """Axonometric schematic. Screen coordinates describe a symbolic room pair."""
+    if impact:
+        structure = (
+            '<path d="M78 67L257 67L393 122L215 122Z" fill="#19354B"/>'
+            '<path d="M78 67V268L215 323V122Z" fill="#10283B"/>'
+            '<path d="M215 122H393V323H215Z" fill="#132D43"/>'
+            '<path d="M78 159H257L393 214H215Z" fill="#688299"/>'
+            '<path d="M78 159L215 214H393V225H215L78 170Z" fill="#9FB5C8"/>'
+            '<path d="M78 67H257L393 122V323H215L78 268Z M78 67L215 122H393 M215 122V323" '
+            'fill="none" stroke="#8299AF" stroke-width="2"/>'
+            '<text x="265" y="150">Recinto emisor</text><text x="259" y="300">Recinto receptor</text>'
+            '<text x="91" y="148" font-size="12">Losa separadora</text>'
+        )
+        direct = "M270 174V266"
+        flank_routes = [
+            "M145 173L114 160V243L162 263",
+            "M319 200L386 200V274H339",
+            "M198 203L218 216V282L191 271",
+            "M240 182L277 182V246H307",
+        ]
+    else:
+        structure = (
+            '<path d="M47 81H366L438 125H119Z" fill="#19354B"/>'
+            '<path d="M47 81V232L119 276V125Z" fill="#10283B"/>'
+            '<path d="M119 125H438V276H119Z" fill="#132D43"/>'
+            '<path d="M208 81L280 125V276L208 232Z" fill="#58748C" fill-opacity=".8"/>'
+            '<path d="M47 81H366L438 125V276H119L47 232Z M47 81L119 125H438 '
+            'M119 125V276 M208 81L280 125V276" fill="none" stroke="#8299AF" stroke-width="2"/>'
+            '<text x="112" y="109">Recinto emisor</text><text x="296" y="109">Recinto receptor</text>'
+            '<text x="197" y="64" font-size="12">Muro separador</text>'
+        )
+        direct = "M202 199H345"
+        flank_routes = []
+    strokes = []
+    impact_names = ("Muro lateral 1", "Muro lateral 2", "Fachada / elemento lateral",
+                    "Tabique separador / elemento vertical")
+    for name, color in flank_styles.items():
+        if not impact or name not in impact_names:
+            continue
+        index = impact_names.index(name)
+        strokes.append(f'<path d="{flank_routes[index]}" stroke="{color}" stroke-width="3" '
+                       f'stroke-dasharray="6 5"><title>{html.escape(name)}</title></path>')
+    color = "#00D4FF" if impact else "#4F7CFF"
+    arrow = "M265 263H275L270 273Z" if impact else "M342 194L352 199L342 204Z"
+    return (
+        '<svg viewBox="0 0 480 338" role="img" aria-label="Isométrica esquemática de recintos" '
+        'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
+        '<rect x="12" y="22" width="456" height="306" rx="12" fill="#081522"/>'
+        '<g fill="#EAF4FF" font-size="15" font-weight="650">' + structure + '</g>'
+        f'<g fill="none"><path d="{direct}" stroke="{color}" stroke-width="4"/>'
+        + "".join(strokes) + '</g>'
+        + (airborne_flank_paths_svg(path_styles or {}, isometric=True) if not impact else "")
+        + f'<path d="{arrow}" fill="{color}"/></svg>'
+    )
+
+
 def impact_transmission_scheme_html(flank_styles):
     """Corte esquemático con la losa entre el emisor y el receptor."""
     routes = {
@@ -4309,7 +4398,9 @@ def impact_transmission_scheme_html(flank_styles):
         )
         legend.append(f'<div style="color:{color}">┅ {html.escape(name)}</div>')
     return (
-        '<div class="sonara-card"><div class="sonara-card-title">Corte · caminos de impacto</div>'
+        '<div class="sonara-card"><div class="sonara-card-title">Isométrica esquemática · caminos de impacto</div>'
+        + iso_room_diagram(impact=True, flank_styles=flank_styles) +
+        '<details><summary>Corte vertical</summary>'
         '<svg viewBox="0 0 480 294" role="img" aria-label="Recinto emisor arriba y recinto receptor abajo" '
         'style="display:block;width:100%;height:auto;font-family:system-ui,sans-serif">'
         '<rect x="15" y="12" width="450" height="266" rx="12" fill="#081522"/>'
@@ -4322,8 +4413,8 @@ def impact_transmission_scheme_html(flank_styles):
         '<path d="M240 85V188" stroke="#00D4FF" stroke-width="4"/>'
         '<path d="M234 187H246L240 199Z" fill="#00D4FF"/>'
         '<text x="251" y="176" fill="#67DFFF" font-size="13">Directo</text>'
-        + "".join(arrows) + '</svg>'
-        '<div style="display:grid;gap:5px">' + "".join(legend) + '</div>'
+        + "".join(arrows) + '</svg></details>'
+        '<div style="display:grid;gap:5px;margin-top:12px">' + "".join(legend) + '</div>'
         '<p style="font-size:.9em;margin:.65rem 0 0">Los trazos discontinuos indican los flancos activos. '
         'Su posición en el corte es esquemática.</p></div>'
     )
