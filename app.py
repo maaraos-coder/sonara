@@ -9984,6 +9984,20 @@ def render_recipe_design(solution, project_id, requirement):
 def render_solution_detail(solution):
     """Show recorded values, including legacy solutions with partial inputs."""
     with st.expander("Ficha técnica de la solución", expanded=True):
+        for assembly in solution.get("construccion_guardada") or []:
+            st.markdown("#### " + assembly.get("nombre", "Sección constructiva"))
+            visual = {key: value for key, value in assembly.items() if key != "nombre"}
+            st.markdown(structural_visual(**visual), unsafe_allow_html=True)
+            entries = [
+                {"Hoja": side, "Material": layer.get("nombre"), "Espesor [mm]": layer["espesor"],
+                 "Densidad [kg/m³]": layer["material"].get("dens"), "E [Pa]": layer["material"].get("E")}
+                for side, layers in (("Emisor", assembly.get("layers_left") or []),
+                                     ("Receptor", assembly.get("layers_right") or []))
+                for layer in layers
+            ]
+            st.dataframe(pd.DataFrame(entries), hide_index=True)
+        if solution.get("base_spectrum_source"):
+            st.caption(solution["base_spectrum_source"])
         layers = solution.get("armado_docente") or []
         if layers:
             st.markdown("#### Visual constructivo · esquema de capas y componentes")
@@ -10045,6 +10059,9 @@ def render_solution_detail(solution):
         if recipe and recipe.get("metodo") == "IN":
             columns["Lw fuente [dB]"] = recipe["source_curve"]
             columns["R cierre [dB]"] = recipe["reduction_curve"]
+        base_curve = solution.get("base_spectrum")
+        if base_curve and len(base_curve) == len(frequencies):
+            columns["Losa desnuda Ln,0 [dB]"] = base_curve
         direct = (solution.get("separador") or {}).get("curva")
         if direct and len(direct) == len(frequencies):
             columns["R separador [dB]"] = direct
@@ -10119,9 +10136,15 @@ def render_reloaded_impact(solution, project_id, requirement):
     receiver_t = tr_col.number_input("TR receptor [s]", min_value=0.05, step=0.01,
                                     value=float(geometry["reverberacion_receptor_s"]), key=f"{prefix}_tr")
     t0 = float(geometry["reverberacion_referencia_s"])
-    ln0w = st.number_input("Ln,0,w de la losa [dB]", value=float(solution["ln0w"]), key=f"{prefix}_ln0")
+    ln0w = st.number_input("Ln,0,w de la losa [dB]", value=float(solution["ln0w"]), key=f"{prefix}_ln0",
+                            disabled=solution.get("normalization") == "Ln_to_LnT")
     st.caption(f"TR de referencia: {t0:g} s. Se usan las curvas guardadas para los flancos.")
     frequencies, base = impact_reference_curve_from_lnw(ln0w)
+    uses_normalized_base = solution.get("normalization") == "Ln_to_LnT"
+    if uses_normalized_base:
+        base = np.asarray(solution["base_spectrum"], dtype=float)
+        st.caption(solution.get("base_spectrum_source", "Espectro Ln,0 de referencia guardado."))
+        st.caption("La conversión desde Ln a LnT usa el volumen receptor: −10 log₁₀(0,16 V / (10 T₀)).")
     edited = st.data_editor(pd.DataFrame({
         "Hz": frequencies,
         "ΔL piso [dB]": solution["delta_piso_por_banda"],
@@ -10147,8 +10170,11 @@ def render_reloaded_impact(solution, project_id, requirement):
             ]), hide_index=True)
             st.json(junctions, expanded=False)
     result = impact_detailed(base, frequencies, floor_improvement=floor, ceiling_improvement=ceiling,
-                             separating_area=area, receiver_t=receiver_t, junctions=junctions, t0=t0)
+                             separating_area=area, receiver_t=t0 if uses_normalized_base else receiver_t,
+                             junctions=junctions, t0=t0)
     curve = result["normalized_curve"]
+    if uses_normalized_base:
+        curve = result["total_curve"] - 10.0 * np.log10(0.16 * volume / (10.0 * t0))
     indices = impact_rating(frequencies, curve)
     lntw = indices["weighted"]
     lnt50 = lntw + indices["ci50_2500"]
