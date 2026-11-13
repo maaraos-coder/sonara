@@ -8588,6 +8588,11 @@ def app_reverberacion_iso():
         "Alfombra": [0.08, 0.24, 0.57, 0.69, 0.71, 0.73],
         "Cielo acústico": [0.45, 0.70, 0.85, 0.90, 0.90, 0.85],
         "Panel de lana mineral": [0.35, 0.80, 0.95, 1.00, 1.00, 1.00],
+        # Curva académica de puerta maciza de madera cerrada.
+        # Fuente: NBR 12179 (ABNT, 1992), tabla reproducida en
+        # https://www.scielo.br/j/ac/a/yNvTbGMXxGxBYVbWYzDk3mP/
+        # No es un ensayo de la puerta real del edificio.
+        "Puerta de madera maciza": [0.14, 0.10, 0.06, 0.08, 0.10, 0.10],
     }
     defaults = [
         ("Piso", floor_area, "Hormigón / superficie dura"),
